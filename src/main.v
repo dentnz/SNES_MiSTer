@@ -4,6 +4,7 @@
 `define USE_SDD1
 `define USE_GSU
 `define USE_SA1
+`define USE_MSU
 
 module main
 (
@@ -56,6 +57,9 @@ module main
    output            GSU_ACTIVE,
    input             GSU_TURBO,
 
+   output            MSU_ACTIVE,
+   output     [15:0] MSU_TRACK_OUT,
+
    input             BLEND,
    input             PAL,
    output            HIGH_RES,
@@ -87,6 +91,9 @@ module main
    input             TURBO,
    output            TURBO_ALLOW,
 
+   output      [4:0] DEBUG_MAP_ACTIVE,
+
+
    output     [15:0] AUDIO_L,
    output     [15:0] AUDIO_R
 );
@@ -106,7 +113,7 @@ wire        SYSCLKF_CE;
 wire        SYSCLKR_CE;
 wire        REFRESH;
 
-wire  [3:0] MAP_ACTIVE;
+wire  [4:0] MAP_ACTIVE;
 
 SNES SNES
 (
@@ -430,7 +437,6 @@ assign MAP_ACTIVE[2] = 0;
 
 assign GSU_ACTIVE = MAP_ACTIVE[2];
 
-
 `ifdef USE_SA1
 wire [7:0]  SA1_DO;
 wire        SA1_IRQ_N;
@@ -492,12 +498,67 @@ SA1Map SA1Map
 assign MAP_ACTIVE[3] = 0;
 `endif
 
-assign TURBO_ALLOW = ~(MAP_ACTIVE[3] | MAP_ACTIVE[1]);
+`ifdef USE_MSU
+wire [7:0]  MSU_DO;
+
+MSUMap MSUMap
+(
+	.mclk(MCLK),
+	.rst_n(RESET_N),
+
+	.ca(CA),
+	.di(DO),
+	.do(MSU_DO),
+	.cpurd_n(CPURD_N),
+	.cpuwr_n(CPUWR_N),
+
+	.pa(PA),
+	.pard_n(PARD_N),
+	.pawr_n(PAWR_N),
+
+	.romsel_n(ROMSEL_N),
+	.ramsel_n(RAMSEL_N),
+
+	.sysclkf_ce(SYSCLKF_CE),
+	.sysclkr_ce(SYSCLKR_CE),
+	.refresh(REFRESH),
+
+	.pal(PAL),
+
+	// .irq_n(SA1_IRQ_N),
+
+	// .rom_addr(SA1_ROM_ADDR),
+	// .rom_q(ROM_Q),
+	// .rom_ce_n(SA1_ROM_CE_N),
+	// .rom_oe_n(SA1_ROM_OE_N),
+	// .rom_word(SA1_ROM_WORD),
+
+	// .bsram_addr(SA1_BSRAM_ADDR),
+	// .bsram_d(SA1_BSRAM_D),
+	// .bsram_q(BSRAM_Q),
+	// .bsram_ce_n(SA1_BSRAM_CE_N),
+	// .bsram_oe_n(SA1_BSRAM_OE_N),
+	// .bsram_we_n(SA1_BSRAM_WE_N),
+
+	.track_out(MSU_TRACK_OUT),
+
+	.map_active(MAP_ACTIVE[4]),
+	.map_ctrl(ROM_TYPE),
+	.rom_mask(ROM_MASK),
+	.bsram_mask(RAM_MASK)
+);
+`else
+assign MAP_ACTIVE[4] = 0;
+`endif
+
+assign MSU_ACTIVE = MAP_ACTIVE[4];
+
+assign DEBUG_MAP_ACTIVE = MAP_ACTIVE;
 
 always @(*) begin
 	case (MAP_ACTIVE)
 `ifdef USE_CX4
-	'b0001:
+	'b00001:
 		begin
 			DI         = CX4_DO;
 			IRQ_N      = CX4_IRQ_N;
@@ -513,7 +574,7 @@ always @(*) begin
 		end
 `endif
 `ifdef USE_SDD1
-	'b0010:
+	'b00010:
 		begin
 			DI         = SDD_DO;
 			IRQ_N      = SDD_IRQ_N;
@@ -529,7 +590,7 @@ always @(*) begin
 		end
 `endif
 `ifdef USE_GSU
-	'b0100:
+	'b00100:
 		begin
 			DI         = GSU_DO;
 			IRQ_N      = GSU_IRQ_N;
@@ -545,7 +606,7 @@ always @(*) begin
 		end
 `endif
 `ifdef USE_SA1
-	'b1000:
+	'b01000:
 		begin
 			DI         = SA1_DO;
 			IRQ_N      = SA1_IRQ_N;
@@ -558,6 +619,12 @@ always @(*) begin
 			BSRAM_OE_N = SA1_BSRAM_OE_N;
 			BSRAM_WE_N = SA1_BSRAM_WE_N;
 			ROM_WORD   = SA1_ROM_WORD;
+		end
+`endif
+`ifdef USE_MSU
+	'b10000:
+		begin
+			DI         = MSU_DO;
 		end
 `endif
 `ifdef USE_DLH
