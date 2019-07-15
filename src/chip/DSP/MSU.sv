@@ -11,10 +11,11 @@ module MSU(
     output reg [7:0] DOUT,
 
     // Stuff for the HPS
-    output    [31:0] addr_out,
-    output    [15:0] track_out,
-    output     [7:0] status_out,
-    output     [7:0] volume_out
+    output     [31:0] addr_out,
+    output     [15:0] track_out,
+    input             track_mounting,
+    output      [7:0] volume_out,
+    output            trig_play
 );
 
 // Read 'registers'
@@ -55,6 +56,7 @@ reg [31:0] MSU_ADDR;
 
 assign addr_out = MSU_ADDR;
 assign track_out = MSU_TRACK;
+assign msu_status_audio_busy = ~track_mounting;
 
 always @(posedge CLK) begin
 	if (~RST_N) begin
@@ -65,6 +67,9 @@ always @(posedge CLK) begin
         MSU_CONTROL <= 0;
         DOUT <= 0;
     end else begin
+        // reset our play trigger
+        trig_play <= 1'b0;
+
         // Register writes
         if (ENABLE & ~WR_N) begin
             case (ADDR[15:0])
@@ -75,9 +80,10 @@ always @(posedge CLK) begin
                 // MSU_Track MSB
                 16'h2005: begin    
                     MSU_TRACK[15:8] <= DIN;
-                    msu_status_audio_busy <= 1;
+                    // trigger play... will be reset on next CLK
+                    trig_play <= 1;
                 end
-                default: $display("nothing");
+                default:;
             endcase 
         end else if (ENABLE & ~RD_N) begin
         // Register reads
@@ -113,7 +119,7 @@ always @(posedge CLK) begin
                 16'h2007: begin
                     DOUT <= MSU_ID[5];
                 end
-                default: $display("nothing");
+                default:;
             endcase
         end
     end

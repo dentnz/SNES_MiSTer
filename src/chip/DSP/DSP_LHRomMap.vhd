@@ -45,9 +45,13 @@ entity DSP_LHRomMap is
 		BSRAM_WE_N	: out std_logic;
 
 		MAP_ACTIVE  : out std_logic;
-		MAP_CTRL		: in std_logic_vector(7 downto 0);
-		ROM_MASK		: in std_logic_vector(23 downto 0);
+		MAP_CTRL    : in std_logic_vector(7 downto 0);
+		ROM_MASK    : in std_logic_vector(23 downto 0);
 		BSRAM_MASK	: in std_logic_vector(23 downto 0);
+
+		MSU_TRACKOUT      : out std_logic_vector(15 downto 0);
+		MSU_TRACKMOUNTING : in  std_logic;
+		MSU_TRIG_PLAY     : out std_logic;
 		
 		BRK_OUT		: out std_logic;
 		DBG_REG		: in std_logic_vector(7 downto 0) := (others => '0');
@@ -73,14 +77,35 @@ architecture rtl of DSP_LHRomMap is
 	signal OBC1_SEL		: std_logic;
 	signal OBC1_SRAM_A 	: std_logic_vector(12 downto 0);
 	signal OBC1_SRAM_DO 	: std_logic_vector(7 downto 0);
-	
+
+	signal MSU_SEL          : std_logic;
+	signal MSU_DO           : std_logic_vector(7 downto 0);
+
 	signal OPENBUS   		: std_logic_vector(7 downto 0);
 
 	signal MAP_DSP_SEL 	: std_logic;
 	signal MAP_OBC1_SEL 	: std_logic;
+	signal MAP_MSU_SEL		: std_logic;
 	signal DSP_CLK	  		: integer;
 	signal ROM_RD	  		: std_logic;
-	
+
+	component MSU is
+		port (
+			CLK             : in  std_logic;
+			RST_N           : in  std_logic;
+			ENABLE          : in  std_logic;
+
+			RD_N            : in  std_logic;
+			WR_N            : in  std_logic;
+			ADDR            : in  std_logic_vector(23 downto 0);
+			DIN             : in  std_logic_vector(7 downto 0);
+		    DOUT            : out std_logic_vector(7 downto 0);
+
+			track_out       : out std_logic_vector(15 downto 0);
+			track_mounting  : in  std_logic;
+			trig_play       : out std_logic
+		);
+	end component;
 begin
 	
 	CEGen : entity work.CEGen
@@ -100,6 +125,7 @@ begin
 		DSP_SEL <= '0';
 		OBC1_SEL <= '0';
 		BSRAM_SEL <= '0';
+		MSU_SEL <= '0';
 		if ROM_MASK(23) = '0' then
 			case MAP_CTRL(2 downto 0) is
 				when "000" =>							-- LoROM/ExLoROM
@@ -168,6 +194,8 @@ begin
 			if CA(22 downto 21) = "01" and CA(15 downto 13) = "011" and BSRAM_MASK(10) = '1' then
 				BSRAM_SEL <= '1';
 			end if;
+			-- @todo MSU_SEL?
+			MSU_SEL <= '1';
 			DSP_SEL <= '0';
 			DSP_A0 <= '1';
 		end if;
@@ -175,8 +203,7 @@ begin
 	
 	MAP_DSP_SEL <= not MAP_CTRL(6) and (MAP_CTRL(7) or not (MAP_CTRL(5) or MAP_CTRL(4)));	--8..B
 	MAP_OBC1_SEL <= MAP_CTRL(7) and MAP_CTRL(6) and not MAP_CTRL(5) and not MAP_CTRL(4);	--C
-	MAP_ACTIVE <= MAP_DSP_SEL or MAP_OBC1_SEL;
-
+	MAP_ACTIVE <= MAP_DSP_SEL or MAP_OBC1_SEL or MSU_SEL;
 
 	DSP_CS_N <= not DSP_SEL;
 	
@@ -208,23 +235,43 @@ begin
 	OBC1 : entity work.OBC1
 	port map(
 		CLK			=> MCLK,
-		RST_N			=> RST_N and MAP_OBC1_SEL,
+		RST_N		=> RST_N and MAP_OBC1_SEL,
 		ENABLE		=> ENABLE,
 		
-		CA				=> CA,
-		DI				=> DI,
+		CA			=> CA,
+		DI			=> DI,
 		CPURD_N		=> CPURD_N,
 		CPUWR_N		=> CPUWR_N,
 		
 		SYSCLKF_CE	=> SYSCLKF_CE,
 		
-		CS				=> OBC1_SEL,
+		CS			=> OBC1_SEL,
 				
 		SRAM_A		=> OBC1_SRAM_A,
 		SRAM_DI  	=> BSRAM_Q,
 		SRAM_DO		=> OBC1_SRAM_DO
 	);
-	
+
+	MSU_instance : component MSU
+	port map(
+		CLK           => MCLK,
+		RST_N		  => RST_N,
+		ENABLE		  => ENABLE,
+
+		RD_N		  => CPURD_N,
+		WR_N		  => CPUWR_N,
+
+		-- @todo CS for MSU_SEL?
+
+		ADDR		  => CA,
+		DIN			  => DI,
+		DOUT		  => MSU_DO,
+
+		track_out     => MSU_TRACKOUT,
+		track_mounting=> MSU_TRACKMOUNTING,
+		trig_play     => MSU_TRIG_PLAY
+	);
+
 	ROM_RD <= (SYSCLKF_CE or SYSCLKR_CE) when rising_edge(MCLK);
 
 	ROM_ADDR <= CART_ADDR and ROM_MASK;
@@ -252,7 +299,9 @@ begin
 	DO <= DSP_DO when DSP_SEL = '1' or DP_SEL = '1' else
 			BSRAM_Q when BSRAM_SEL = '1' or OBC1_SEL = '1' else
 			ROM_Q(7 downto 0) when ROMSEL_N = '0' else
-			OPENBUS;
+			-- @todo testing
+			MSU_DO;
+			--OPENBUS;
 
 	IRQ_N <= '1';
 

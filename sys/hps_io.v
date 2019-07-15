@@ -102,6 +102,10 @@ module hps_io #(parameter STRLEN=0, PS2DIV=0, WIDE=0, VDNUM=1, PS2WE=0)
 	// UART flags
 	input      [15:0] uart_mode,
 
+	// MSU support
+	input      [15:0] msu_trackout,
+	output reg        msu_trackmounting,
+
 	// ps2 keyboard emulation
 	output            ps2_kbd_clk_out,
 	output            ps2_kbd_data_out,
@@ -340,7 +344,7 @@ always@(posedge clk_sys) begin
 				img_mounted <= 0;
 				if(io_din == 5) ps2_key_raw <= 0;
 			end else begin
-
+				
 				case(cmd)
 					// buttons and switches
 					'h01: cfg <= io_din[7:0];
@@ -486,6 +490,13 @@ always@(posedge clk_sys) begin
 					
 					//menu mask
 					'h2E: if(byte_cnt == 1) io_dout <= status_menumask;
+
+					//MSU support
+					'h50: begin
+						io_dout <= msu_trackout;        // To main_mister: Selected track, zero if stopped
+					end
+					'h51: msu_trackmounting <= 0;       // From main_mister: Selected track mounted state
+					'h52: msu_trackmounting <= 1;       // From main_mister: Selected track mounting state
 				endcase
 			end
 		end
