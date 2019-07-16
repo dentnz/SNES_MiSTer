@@ -790,12 +790,12 @@ lightgun lightgun
 ///////////////////////////  MSU Audio  ///////////////////////////////
 
 // This handles the state of playing
-reg msu_audio_play = 0;
+(*noprune*) reg msu_audio_play = 0;
 
 // For the state machine 'step'
-reg msu_audio_state = 2'd0;
+(*noprune*) reg [1:0] msu_audio_state = 2'd0;
 // Current mounted files mode (e.g repeat)
-reg msu_audio_mode = 0;
+(*noprune*) reg [1:0] msu_audio_mode = 0;
 
 reg left_chan = 0;
 reg [15:0] temp_l;
@@ -814,7 +814,7 @@ always @(posedge clk_sys) begin
 	if (audio_clk_div > 0) audio_clk_div <= audio_clk_div - 1;	
 	else begin
 		left_chan <= !left_chan;
-		audio_clk_div <= 486;
+		audio_clk_div <= 244;
 		// left then right samples
 		if (left_chan) samp_l <= audio_fifo_dout;
 		else begin
@@ -825,14 +825,14 @@ always @(posedge clk_sys) begin
 	end
 end
 
-wire audio_clk_en = (audio_clk_div==0);
-wire audio_fifo_reset = RESET;
-wire audio_fifo_full;
-wire audio_fifo_wr = !audio_fifo_full && sd_ack && sd_buff_wr && msu_audio_play && !msu_trackmounting;
-wire [11:0] audio_fifo_usedw;
-wire audio_fifo_empty;
-wire audio_fifo_rd = !audio_fifo_empty && audio_clk_en && msu_audio_play && !msu_trackmounting;
-wire [15:0] audio_fifo_dout;
+(*keep*) wire audio_clk_en = (audio_clk_div==0);
+(*keep*) wire audio_fifo_reset = RESET;
+(*keep*) wire audio_fifo_full;
+(*keep*) wire audio_fifo_wr = !audio_fifo_full && sd_ack && sd_buff_wr && msu_audio_play && !msu_trackmounting;
+(*keep*) wire [11:0] audio_fifo_usedw;
+(*keep*) wire audio_fifo_empty;
+(*keep*) wire audio_fifo_rd = !audio_fifo_empty && audio_clk_en && msu_audio_play && !msu_trackmounting;
+(*keep*) wire [15:0] audio_fifo_dout;
 
 reg [15:0] msu_audio_l;
 reg [15:0] msu_audio_r;
@@ -852,42 +852,45 @@ cd_audio_fifo cd_audio_fifo_inst (
 	.q(audio_fifo_dout)
 );
 
-reg [20:0] msu_audio_start_frame = 21'd1;
-reg [20:0] msu_audio_current_frame = 21'd1;
-reg [20:0] msu_audio_end_frame = 21'd128;
+reg [20:0] msu_audio_start_frame = 21'd0;
+reg [20:0] msu_audio_current_frame = 21'd0;
+reg [20:0] msu_audio_end_frame = 21'd2097151; // 1MB (since 512KB sectors).
 
 // MSU Audio player state machine
 always @(posedge clk_sys) begin
 	// We have a trigger to play...
-	if (msu_trig_play) msu_audio_play <= 1;
+	if (msu_trig_play) begin
+		msu_audio_current_frame <= 0;
+		msu_audio_state <= 0;
+		msu_audio_play <= 1;
+	end
 
 	if (RESET) begin
-		msu_audio_state <= 2'd1;
-		msu_audio_mode <= 2'd2;
+		msu_audio_state <= 2'd0;
+		msu_audio_mode <= 2'd1;
 		msu_audio_play <= 0;
-		// @todo clear fifo?
+		// @todo clear fifo? (don't need to, as RESET is hooked up to FIFO aclr. ;) ElectronAsh.
 	end
 	case (msu_audio_state)
 		0: if (msu_audio_play && !msu_trackmounting) begin
 			sd_lba <= msu_audio_current_frame;
-			sd_rd <= 1'b1;					// Go!
+			sd_rd <= 1'b1;					// Go! (request a sector from the HPS).
 			msu_audio_state <= msu_audio_state + 1;
 		end
 		1: begin
-			if (sd_ack) begin
+			if (sd_ack) begin		// sd_ack goes high at the start of a sector transfer (and during).
 				sd_rd <= 1'b0;
 				msu_audio_state <= msu_audio_state + 1;
 			end
 		end
 		2: begin
-			
 			// @todo handle stop and track changes
 			// if (cmd_buff[0]==8'h08) begin	// STOP CDDA playback as soon as a READ command is seen! TESTING !!!
 			// 	msu_audio_play <= 1'b0;
 			// 	msu_audio_state <= 0;
 			// end
 			//else
-			// "sd_ack" low denotes a sector has just transferred. 
+			// "sd_ack" goes low after a sector has been transferred. 
 			if (!sd_ack && audio_fifo_usedw <= 1176) begin
 				// Check if we've reached end_frame yet (and msu_audio_play is still set).
 				if (msu_audio_current_frame < msu_audio_end_frame && msu_audio_play) begin
@@ -896,7 +899,7 @@ always @(posedge clk_sys) begin
 					sd_rd <= 1'b1;
 					msu_audio_state <= 1;			// ..No, Loop back, to fetch another sector!
 				end
-				else begin
+				/*else begin
 					case (msu_audio_mode)
 					// 1: begin			// Repeat.
 					// 	current_frame <= start_frame;	// Set back to the start frame.
@@ -915,11 +918,11 @@ always @(posedge clk_sys) begin
 					// end
 						1: begin // Played without repeat so time to stop
 							// set our status to not audio_playing
-							msu_audio_state <= 0;
 							msu_audio_play <= 0;
+							msu_audio_state <= 0;
 						end
 					endcase
-				end
+				end*/
 			end
 		end
 		default:; // Do nothing but wait

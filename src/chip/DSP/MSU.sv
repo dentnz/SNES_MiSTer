@@ -12,7 +12,7 @@ module MSU(
 
     // Stuff for the HPS
     output     [31:0] addr_out,
-    output     [15:0] track_out,
+    output     reg [15:0] track_out,
     input             track_mounting,
     output      [7:0] volume_out,
     output            trig_play
@@ -55,8 +55,10 @@ reg  [7:0] MSU_CONTROL;                   // $2007
 reg [31:0] MSU_ADDR;
 
 assign addr_out = MSU_ADDR;
-assign track_out = MSU_TRACK;
+//assign track_out = MSU_TRACK;
 assign msu_status_audio_busy = ~track_mounting;
+
+(*keep*) wire IO_BANK_SEL = (ADDR[23:16]>=8'h00 && ADDR[23:16]<=8'h3F) || (ADDR[23:16]>=8'h80 && ADDR[23:16]<=8'hBF);
 
 always @(posedge CLK) begin
 	if (~RST_N) begin
@@ -71,7 +73,7 @@ always @(posedge CLK) begin
         trig_play <= 1'b0;
 
         // Register writes
-        if (ENABLE & ~WR_N) begin
+        if (ENABLE & ~WR_N & IO_BANK_SEL)   begin
             case (ADDR[15:0])
                 // MSU_Track LSB
                 16'h2004: begin
@@ -80,12 +82,13 @@ always @(posedge CLK) begin
                 // MSU_Track MSB
                 16'h2005: begin    
                     MSU_TRACK[15:8] <= DIN;
+						  track_out <= {DIN, MSU_TRACK[7:0]};	// Only update track_out when both (upper and lower) bytes arrive. ElectronAsh.
                     // trigger play... will be reset on next CLK
                     trig_play <= 1;
                 end
                 default:;
             endcase 
-        end else if (ENABLE & ~RD_N) begin
+        end else if (ENABLE & ~RD_N & IO_BANK_SEL) begin
         // Register reads
             case (ADDR[15:0])
                 // MSU_STATUS
