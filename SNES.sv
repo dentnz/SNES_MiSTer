@@ -825,11 +825,11 @@ always @(posedge clk_sys) begin
 	end
 end
 
-(*keep*) wire audio_clk_en = (audio_clk_div==0);
+(*keep*) wire audio_clk_en = (audio_clk_div==1);
 (*keep*) wire audio_fifo_reset = RESET;
 (*keep*) wire audio_fifo_full;
 (*keep*) wire audio_fifo_wr = !audio_fifo_full && sd_ack && sd_buff_wr && msu_audio_play && !msu_trackmounting;
-(*keep*) wire [11:0] audio_fifo_usedw;
+(*keep*) wire [10:0] audio_fifo_usedw;
 (*keep*) wire audio_fifo_empty;
 (*keep*) wire audio_fifo_rd = !audio_fifo_empty && audio_clk_en && msu_audio_play && !msu_trackmounting;
 (*keep*) wire [15:0] audio_fifo_dout;
@@ -858,6 +858,7 @@ reg [20:0] msu_audio_end_frame = 21'd2097151; // 1MB (since 512KB sectors).
 
 // MSU Audio player state machine
 always @(posedge clk_sys) begin
+
 	// We have a trigger to play...
 	if (msu_trig_play) begin
 		msu_audio_current_frame <= 0;
@@ -891,7 +892,7 @@ always @(posedge clk_sys) begin
 			// end
 			//else
 			// "sd_ack" goes low after a sector has been transferred. 
-			if (!sd_ack && audio_fifo_usedw <= 1176) begin
+			if (!sd_ack && audio_fifo_usedw < 1535) begin
 				// Check if we've reached end_frame yet (and msu_audio_play is still set).
 				if (msu_audio_current_frame < msu_audio_end_frame && msu_audio_play) begin
 					msu_audio_current_frame <= msu_audio_current_frame + 1;
