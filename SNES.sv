@@ -251,10 +251,13 @@ wire  [1:0] buttons;
 wire [31:0] status;
 wire [15:0] status_menumask = {!GUN_MODE, ~turbo_allow, ~gg_available, ~GSU_ACTIVE, ~bk_ena};
 wire        forced_scandoubler;
-reg  [31:0] sd_lba;
-reg         sd_rd = 0;
-reg         sd_wr = 0;
-wire        sd_ack;
+
+//reg  [31:0] sd_lba;
+wire [31:0] sd_lba [0:3];
+
+reg   [3:0] sd_rd = 0;
+reg   [3:0] sd_wr = 0;
+wire  [3:0] sd_ack;
 wire  [7:0] sd_buff_addr;
 wire [15:0] sd_buff_dout;
 wire [15:0] sd_buff_din;
@@ -502,8 +505,13 @@ main main
 );
 
 // @todo clamping and all that stuff?!
-assign AUDIO_L = MAIN_AUDIO_L + msu_audio_l;
-assign AUDIO_R = MAIN_AUDIO_R + msu_audio_r;
+wire signed [16:0] AUDIO_MIX_L = $signed({MAIN_AUDIO_L[15],MAIN_AUDIO_L}) + $signed({msu_audio_l[15],msu_audio_l});
+wire signed [16:0] AUDIO_MIX_R = $signed({MAIN_AUDIO_R[15],MAIN_AUDIO_R}) + $signed({msu_audio_r[15],msu_audio_r});
+assign AUDIO_L = AUDIO_MIX_L[16:1];
+assign AUDIO_R = AUDIO_MIX_R[16:1];
+
+//assign AUDIO_L = msu_audio_l;
+//assign AUDIO_R = msu_audio_r;
 
 ////////////////////////////  CODES  ///////////////////////////////////
 
@@ -640,9 +648,9 @@ dpram_dif #(BSRAM_BITS,8,BSRAM_BITS-1,16) bsram
 	.wren_a(cart_download ? ioctl_wr : ~BSRAM_CE_N & ~BSRAM_WE_N),
 	.q_a(BSRAM_Q),
 
-	.address_b({sd_lba[BSRAM_BITS-10:0],sd_buff_addr}),
+	.address_b({sd_lba[0][BSRAM_BITS-10:0],sd_buff_addr}),
 	.data_b(sd_buff_dout),
-	.wren_b(sd_buff_wr & sd_ack),
+	.wren_b(sd_buff_wr & sd_ack[0]),
 	.q_b(sd_buff_din)
 );
 
@@ -790,49 +798,53 @@ lightgun lightgun
 ///////////////////////////  MSU Audio  ///////////////////////////////
 
 // This handles the state of playing
-reg msu_audio_play = 0;
+(*noprune*) reg msu_audio_play = 0;
 
 // For the state machine 'step'
-reg msu_audio_state = 2'd0;
+(*noprune*) reg [1:0] msu_audio_state = 2'd0;
 // Current mounted files mode (e.g repeat)
-reg msu_audio_mode = 0;
+(*noprune*) reg [1:0] msu_audio_mode = 0;
 
 reg left_chan = 0;
 reg [15:0] temp_l;
 reg [15:0] samp_l;
 reg [15:0] samp_r;
 reg [9:0] audio_clk_div = 0;
-reg sd_ack_1;
 
-always @(posedge clk_sys) begin
-	sd_ack_1 <= sd_ack;
-	
-	// Set left channel on rising edge of sd_ack.
-	// This should override the above assign!
-	if (sd_ack && !sd_ack_1) left_chan <= 1'b1;
-
+always @(posedge CLK_50M) begin
+	if (sd_ack[1] && sd_lba[1]==0 && msu_audio_word_count==4) left_chan <= 1'b1;	// The first sample of a MSU PCM file should be the LEFT sample. (ignoring the two header words).
+																											// The rest of the samples should be contiguously interleaved (LEFt/RIGHT) from that point on.
 	if (audio_clk_div > 0) audio_clk_div <= audio_clk_div - 1;	
 	else begin
 		left_chan <= !left_chan;
-		audio_clk_div <= 486;
+		audio_clk_div <= 566;
+		
 		// left then right samples
-		if (left_chan) samp_l <= audio_fifo_dout;
+		if (left_chan) temp_l <= audio_fifo_dout;
 		else begin
 			// Make sure both the left and right samples get output at the same time.
-			//samp_l <= temp_l;
+			samp_l <= temp_l;
 			samp_r <= audio_fifo_dout;
 		end
 	end
 end
 
-wire audio_clk_en = (audio_clk_div==0);
-wire audio_fifo_reset = RESET;
-wire audio_fifo_full;
-wire audio_fifo_wr = !audio_fifo_full && sd_ack && sd_buff_wr && msu_audio_play && !msu_trackmounting;
-wire [11:0] audio_fifo_usedw;
-wire audio_fifo_empty;
-wire audio_fifo_rd = !audio_fifo_empty && audio_clk_en && msu_audio_play && !msu_trackmounting;
-wire [15:0] audio_fifo_dout;
+// The MSU audio PCM files contain the "MSU1" ASCII in the first two WORDs,
+// followed by two more words that contain the loop index (in SAMPLES), for when repeat mode is active.
+//
+// (sd_lba[1]==0, to check only the first sector).
+wire msu_header_skip = sd_lba[1]==0 && (msu_audio_word_count>=0 && msu_audio_word_count<=3);
+
+(*keep*) wire audio_clk_en = (audio_clk_div==1);
+(*keep*) wire audio_fifo_reset = RESET | msu_trig_play;
+(*keep*) wire audio_fifo_full;
+//(*keep*) wire audio_fifo_wr = !audio_fifo_full && sd_ack[1] && sd_buff_wr && msu_audio_play && !msu_trackmounting;
+(*keep*) wire audio_fifo_wr = !audio_fifo_full && sd_ack[1] && sd_buff_wr && !msu_header_skip;
+(*keep*) wire [11:0] audio_fifo_usedw;
+(*keep*) wire audio_fifo_empty;
+//(*keep*) wire audio_fifo_rd = !audio_fifo_empty && audio_clk_en && msu_audio_play && !msu_trackmounting;
+(*keep*) wire audio_fifo_rd = !audio_fifo_empty && audio_clk_en && msu_audio_play;
+(*keep*) wire [15:0] audio_fifo_dout;
 
 reg [15:0] msu_audio_l;
 reg [15:0] msu_audio_r;
@@ -844,59 +856,75 @@ cd_audio_fifo cd_audio_fifo_inst (
 	.wrreq(audio_fifo_wr),
 	.wrfull(audio_fifo_full),
 	.wrusedw(audio_fifo_usedw),
-	.data(sd_buff_din),
+	.data(sd_buff_dout),
 	
-	.rdclk(clk_sys),
+	.rdclk(CLK_50M),
 	.rdreq(audio_fifo_rd),
 	.rdempty(audio_fifo_empty),
 	.q(audio_fifo_dout)
 );
 
-reg [20:0] msu_audio_start_frame = 21'd1;
-reg [20:0] msu_audio_current_frame = 21'd1;
-reg [20:0] msu_audio_end_frame = 21'd128;
+reg [20:0] msu_audio_start_frame = 21'd0;
+reg [20:0] msu_audio_current_frame = 21'd0;
+reg [20:0] msu_audio_end_frame = 21'd2097151; // 1GB! (since 512KB sectors). 2,097,152 * 512 = 1,073,741,824 bytes = 1GB.
+
+reg [7:0] msu_audio_word_count = 8'd0;	// Counts the 16-bit WORDs of each SECTOR. (WORDs 0-255).
+
+(*noprune*) reg [31:0] msu_audio_loop_index = 32'h00000000;
 
 // MSU Audio player state machine
 always @(posedge clk_sys) begin
+
+	// Sample loop point value is in little-endian!
+	if (sd_ack[1] && sd_lba[1]==0 && msu_audio_word_count==2 && sd_buff_wr) msu_audio_loop_index[15:0]  <= {sd_buff_dout[7:0], sd_buff_dout[15:8]};
+	if (sd_ack[1] && sd_lba[1]==0 && msu_audio_word_count==3 && sd_buff_wr) msu_audio_loop_index[31:16] <= {sd_buff_dout[7:0], sd_buff_dout[15:8]};
+
 	// We have a trigger to play...
-	if (msu_trig_play) msu_audio_play <= 1;
+	if (msu_trig_play) begin
+		msu_audio_current_frame <= 0;
+		msu_audio_word_count <= 0;
+		msu_audio_state <= 0;
+		msu_audio_play <= 1;
+	end
 
 	if (RESET) begin
-		msu_audio_state <= 2'd1;
-		msu_audio_mode <= 2'd2;
+		msu_audio_state <= 2'd0;
+		msu_audio_mode <= 2'd1;
 		msu_audio_play <= 0;
-		// @todo clear fifo?
+		// @todo clear fifo? (don't need to, as RESET is hooked up to FIFO aclr. ;) ElectronAsh.
 	end
 	case (msu_audio_state)
 		0: if (msu_audio_play && !msu_trackmounting) begin
-			sd_lba <= msu_audio_current_frame;
-			sd_rd <= 1'b1;					// Go!
+			sd_lba[1] <= msu_audio_current_frame;
+			sd_rd[1] <= 1'b1;					// Go! (request a sector from the HPS). 256 WORDS. 512 BYTES.
 			msu_audio_state <= msu_audio_state + 1;
 		end
 		1: begin
-			if (sd_ack) begin
-				sd_rd <= 1'b0;
+			if (sd_ack[1]) begin		// sd_ack goes high at the start of a sector transfer (and during).
+				sd_rd[1] <= 1'b0;
+				msu_audio_word_count <= 0;	// Sanity check.
 				msu_audio_state <= msu_audio_state + 1;
 			end
 		end
 		2: begin
-			
+			if (sd_ack[1] && sd_buff_wr) msu_audio_word_count <= msu_audio_word_count + 1;
+		
 			// @todo handle stop and track changes
 			// if (cmd_buff[0]==8'h08) begin	// STOP CDDA playback as soon as a READ command is seen! TESTING !!!
 			// 	msu_audio_play <= 1'b0;
 			// 	msu_audio_state <= 0;
 			// end
 			//else
-			// "sd_ack" low denotes a sector has just transferred. 
-			if (!sd_ack && audio_fifo_usedw <= 1176) begin
+			// "sd_ack" goes low after a sector has been transferred. 
+			if (!sd_ack[1] && audio_fifo_usedw < 768) begin
 				// Check if we've reached end_frame yet (and msu_audio_play is still set).
 				if (msu_audio_current_frame < msu_audio_end_frame && msu_audio_play) begin
 					msu_audio_current_frame <= msu_audio_current_frame + 1;
-					sd_lba <= sd_lba + 1;
-					sd_rd <= 1'b1;
+					sd_lba[1] <= sd_lba[1] + 1;
+					sd_rd[1] <= 1'b1;
 					msu_audio_state <= 1;			// ..No, Loop back, to fetch another sector!
 				end
-				else begin
+				/*else begin
 					case (msu_audio_mode)
 					// 1: begin			// Repeat.
 					// 	current_frame <= start_frame;	// Set back to the start frame.
@@ -915,11 +943,11 @@ always @(posedge clk_sys) begin
 					// end
 						1: begin // Played without repeat so time to stop
 							// set our status to not audio_playing
-							msu_audio_state <= 0;
 							msu_audio_play <= 0;
+							msu_audio_state <= 0;
 						end
 					endcase
-				end
+				end*/
 			end
 		end
 		default:; // Do nothing but wait
@@ -931,8 +959,12 @@ end
 // But this mux is needed anyway, to prevent possible DC offset on the output.
 // (the state of the FIFO output can be undefined when aclr is High.)
 //
-assign msu_audio_l = (msu_audio_play) ? samp_l : 16'h0000;
-assign msu_audio_r = (msu_audio_play) ? samp_r : 16'h0000;
+//assign msu_audio_l = (msu_audio_play) ? samp_l : 16'h0000;
+//assign msu_audio_r = (msu_audio_play) ? samp_r : 16'h0000;
+
+assign msu_audio_l = samp_l;
+assign msu_audio_r = samp_r;
+
 
 /////////////////////////  STATE SAVE/LOAD  /////////////////////////////
 
@@ -959,44 +991,47 @@ end
 wire bk_load    = status[12];
 wire bk_save    = status[13] | (bk_pending & OSD_STATUS && status[23]);
 reg  bk_loading = 0;
-reg  bk_state   = 0;
 
-// always @(posedge clk_sys) begin
-// 	reg old_load = 0, old_save = 0, old_ack;
+reg  [1:0] bk_state = 0;
 
-// 	old_load <= bk_load & bk_ena;
-// 	old_save <= bk_save & bk_ena;
-// 	old_ack  <= sd_ack;
+always @(posedge clk_sys) begin
+ 	reg old_load = 0, old_save = 0, old_ack;
 
-// 	if(~old_ack & sd_ack) {sd_rd, sd_wr} <= 0;
+ 	old_load <= bk_load & bk_ena;
+	old_save <= bk_save & bk_ena;
+ 	old_ack  <= sd_ack[0];
+
+ 	if(~old_ack & sd_ack[0]) {sd_rd[0], sd_wr[0]} <= 0;
 	
-// 	if(!bk_state) begin
-// 		if((~old_load & bk_load) | (~old_save & bk_save)) begin
-// 			bk_state <= 1;
-// 			bk_loading <= bk_load;
-// 			sd_lba <= 0;
-// 			sd_rd <=  bk_load;
-// 			sd_wr <= ~bk_load;
-// 		end
-// 		if(old_downloading & ~cart_download & |img_size & bk_ena) begin
-// 			bk_state <= 1;
-// 			bk_loading <= 1;
-// 			sd_lba <= 0;
-// 			sd_rd <= 1;
-// 			sd_wr <= 0;
-// 		end
-// 	end else begin
-// 		if(old_ack & ~sd_ack) begin
-// 			if(sd_lba >= ram_mask[23:9]) begin
-// 				bk_loading <= 0;
-// 				bk_state <= 0;
-// 			end else begin
-// 				sd_lba <= sd_lba + 1'd1;
-// 				sd_rd  <=  bk_loading;
-// 				sd_wr  <= ~bk_loading;
-// 			end
-// 		end
-// 	end
-// end
+	if (!bk_state) begin	// bk_state==0.
+ 		if((~old_load & bk_load) | (~old_save & bk_save)) begin
+ 			bk_loading <= bk_load;
+ 			sd_lba[0] <= 0;
+ 			sd_rd[0] <=  bk_load;
+ 			sd_wr[0] <= ~bk_load;
+			bk_state <= 1;
+ 		end
+ 		if(old_downloading & ~cart_download & |img_size & bk_ena) begin
+ 			bk_loading <= 1;
+			sd_lba[0] <= 0;
+ 			sd_rd[0] <= 1;
+ 			sd_wr[0] <= 0;
+			bk_state <= 1;
+ 		end
+	end
+	else begin	// bk_state==1.
+ 		if(old_ack & ~sd_ack[0]) begin
+			if(sd_lba[0] >= ram_mask[23:9]) begin
+ 				bk_loading <= 0;
+ 				bk_state <= 0;
+ 			end else begin
+ 				sd_lba[0] <= sd_lba[0] + 1'd1;
+ 				sd_rd[0]  <=  bk_loading;
+ 				sd_wr[0]  <= ~bk_loading;
+ 			end
+ 		end
+ 	end
+
+end
  
 endmodule

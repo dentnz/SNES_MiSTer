@@ -30,7 +30,7 @@
 
 // WIDE=1 for 16 bit file I/O
 // VDNUM 1-4
-module hps_io #(parameter STRLEN=0, PS2DIV=0, WIDE=0, VDNUM=1, PS2WE=0)
+module hps_io #(parameter STRLEN=0, PS2DIV=0, WIDE=0, VDNUM=4, PS2WE=0)
 (
 	input             clk_sys,
 	inout      [45:0] HPS_BUS,
@@ -68,10 +68,10 @@ module hps_io #(parameter STRLEN=0, PS2DIV=0, WIDE=0, VDNUM=1, PS2WE=0)
 	output reg [63:0] img_size,     // size of image in bytes. valid only for active bit in img_mounted
 
 	// SD block level access
-	input      [31:0] sd_lba,
+	input      [31:0] sd_lba [0:VD],
 	input      [VD:0] sd_rd,       // only single sd_rd can be active at any given time
 	input      [VD:0] sd_wr,       // only single sd_wr can be active at any given time
-	output reg        sd_ack,
+	output reg [VD:0] sd_ack,
 
 	// do not use in new projects.
 	// CID and CSD are fake except CSD image size field.
@@ -154,6 +154,8 @@ assign forced_scandoubler = cfg[4];
 //cfg[5] - ypbpr handled in sys_top
 
 // command byte read by the io controller
+//
+/*
 wire [15:0] sd_cmd =
 {
 	2'b00,
@@ -169,6 +171,9 @@ wire [15:0] sd_cmd =
 	sd_wr[0],
 	sd_rd[0]
 };
+*/
+reg [15:0] sd_cmd;
+
 
 ///////////////// calc video parameters //////////////////
 
@@ -284,6 +289,19 @@ reg [31:0] ps2_key_raw = 0;
 wire       pressed  = (ps2_key_raw[15:8] != 8'hf0);
 wire       extended = (~pressed ? (ps2_key_raw[23:16] == 8'he0) : (ps2_key_raw[15:8] == 8'he0));
 
+reg sd_ack_int = 0;
+
+reg [3:0] sd_ack_d = 0;
+
+wire [31:0] sd_lba_mux = (slot_0_active) ? sd_lba[0] :
+								 (slot_1_active) ? sd_lba[1] :
+								 (slot_2_active) ? sd_lba[2] : 
+														 sd_lba[3];
+reg slot_0_active = 0;
+reg slot_1_active = 0;
+reg slot_2_active = 0;
+reg slot_3_active = 0;
+
 always@(posedge clk_sys) begin
 	reg [15:0] cmd;
 	reg  [9:0] byte_cnt;   // counts bytes
@@ -299,7 +317,50 @@ always@(posedge clk_sys) begin
 		stflg <= stflg + 1'd1;
 		status_req <= status_in;
 	end
+	
+// sd_cmd = {2'b00, sd_wr[3], sd_wr[2], sd_wr[1], sd_rd[3], sd_rd[2], sd_rd[1], 4'b0101, sd_conf, 1'b1, sd_wr[0], sd_rd[0]};	// Just for notes. ElectronAsh.
+//
+	// Defaults.
+	sd_cmd[0] <= 0;
+	sd_cmd[1] <= 0;
+	sd_cmd[8] <= 0;
+	sd_cmd[9] <= 0;
+	sd_cmd[10] <= 0;
+	sd_cmd[11] <= 0;
+	sd_cmd[12] <= 0;
+	sd_cmd[13] <= 0;
 
+	// sd_rd / sd_wr Priority encoder.
+	     if (sd_rd[0]) begin sd_cmd[0]  <= 1; slot_0_active <= 1; end
+	else if (sd_wr[0]) begin sd_cmd[1]  <= 1; slot_0_active <= 1; end
+	
+	else if (sd_rd[1]) begin sd_cmd[8]  <= 1; slot_1_active <= 1; end
+	else if (sd_wr[1]) begin sd_cmd[11] <= 1; slot_1_active <= 1; end
+	
+	else if (sd_rd[2]) begin sd_cmd[9]  <= 1; slot_2_active <= 1; end
+	else if (sd_wr[2]) begin sd_cmd[12] <= 1; slot_2_active <= 1; end
+
+	else if (sd_rd[3]) begin sd_cmd[10] <= 1; slot_3_active <= 1; end
+	else if (sd_wr[3]) begin sd_cmd[13] <= 1; slot_3_active <= 1; end
+	
+	sd_cmd[2] <= 1'b1;
+	sd_cmd[3] <= sd_conf;
+	sd_cmd[7:4] <= 4'h5;
+	sd_cmd[15:14] <= 2'b00;
+	
+	sd_ack_d <= sd_ack;
+	
+	sd_ack[0] <= slot_0_active && sd_ack_int;
+	sd_ack[1] <= slot_1_active && sd_ack_int;
+	sd_ack[2] <= slot_2_active && sd_ack_int;
+	sd_ack[3] <= slot_3_active && sd_ack_int;
+	
+	if ( (sd_ack_d[0] && !sd_ack[0]) ) begin slot_0_active <= 0; end
+	if ( (sd_ack_d[1] && !sd_ack[1]) ) begin slot_1_active <= 0; end
+	if ( (sd_ack_d[2] && !sd_ack[2]) ) begin slot_2_active <= 0; end
+	if ( (sd_ack_d[3] && !sd_ack[3]) ) begin slot_3_active <= 0; end
+
+	
 	sd_buff_wr <= b_wr[0];
 	if(b_wr[2] && (~&sd_buff_addr)) sd_buff_addr <= sd_buff_addr + 1'b1;
 	b_wr <= (b_wr<<1);
@@ -318,7 +379,7 @@ always@(posedge clk_sys) begin
 		if(cmd == 'h24) TIMESTAMP[32] <= ~TIMESTAMP[32];
 		cmd <= 0;
 		byte_cnt <= 0;
-		sd_ack <= 0;
+		sd_ack_int <= 0;
 		sd_ack_conf <= 0;
 		io_dout <= 0;
 		ps2skip <= 0;
@@ -334,7 +395,7 @@ always@(posedge clk_sys) begin
 				case(io_din)
 					'h19: sd_ack_conf <= 1;
 					'h17,
-					'h18: sd_ack <= 1;
+					'h18: sd_ack_int <= 1;
 					'h29: io_dout <= {4'hA, stflg};
 					'h2B: io_dout <= 1;
 					'h2F: io_dout <= 1;
@@ -392,23 +453,25 @@ always@(posedge clk_sys) begin
 					// reading sd card status
 					'h16: case(byte_cnt)
 								1: io_dout <= sd_cmd;
-								2: io_dout <= sd_lba[15:0];
-								3: io_dout <= sd_lba[31:16];
+								//2: io_dout <= sd_lba[15:0];
+								//3: io_dout <= sd_lba[31:16];
+								2: io_dout <= sd_lba_mux[15:0];
+								3: io_dout <= sd_lba_mux[31:16];
 							endcase
 
-					// send SD config IO -> FPGA
+					// send SD config IO (HPS) -> FPGA
 					// flag that download begins
 					// sd card knows data is config if sd_dout_strobe is asserted
 					// with sd_ack still being inactive (low)
 					'h19,
-					// send sector IO -> FPGA
+					// send sector IO (HPS) -> FPGA
 					// flag that download begins
 					'h17: begin
 							sd_buff_dout <= io_din[DW:0];
 							b_wr <= 1;
 						end
 
-					// reading sd card write data
+					// reading sd card write data. FPGA -> IO (HPS).
 					'h18: begin
 							if(~&sd_buff_addr) sd_buff_addr <= sd_buff_addr + 1'b1;
 							io_dout <= sd_buff_din;
