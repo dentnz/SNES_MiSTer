@@ -502,8 +502,11 @@ main main
 );
 
 // @todo clamping and all that stuff?!
-assign AUDIO_L = MAIN_AUDIO_L + msu_audio_l;
-assign AUDIO_R = MAIN_AUDIO_R + msu_audio_r;
+//assign AUDIO_L = MAIN_AUDIO_L + msu_audio_l;
+//assign AUDIO_R = MAIN_AUDIO_R + msu_audio_r;
+
+assign AUDIO_L = msu_audio_l;
+assign AUDIO_R = msu_audio_r;
 
 ////////////////////////////  CODES  ///////////////////////////////////
 
@@ -804,17 +807,21 @@ reg [15:0] samp_r;
 reg [9:0] audio_clk_div = 0;
 reg sd_ack_1;
 
-always @(posedge clk_sys) begin
+always @(posedge CLK_50M) begin
 	sd_ack_1 <= sd_ack;
 	
 	// Set left channel on rising edge of sd_ack.
 	// This should override the above assign!
-	if (sd_ack && !sd_ack_1) left_chan <= 1'b1;
+	//if (sd_ack && !sd_ack_1) left_chan <= 1'b1;
+	if (msu_trig_play) left_chan <= 1'b1;
+	
 
 	if (audio_clk_div > 0) audio_clk_div <= audio_clk_div - 1;	
 	else begin
 		left_chan <= !left_chan;
-		audio_clk_div <= 244;
+		audio_clk_div <= 566;
+		
+		/*
 		// left then right samples
 		if (left_chan) samp_l <= audio_fifo_dout;
 		else begin
@@ -822,16 +829,23 @@ always @(posedge clk_sys) begin
 			//samp_l <= temp_l;
 			samp_r <= audio_fifo_dout;
 		end
+		*/
+		
+		// TESTING mono for now !!
+		samp_l <= audio_fifo_dout;
+		samp_r <= audio_fifo_dout;
 	end
 end
 
 (*keep*) wire audio_clk_en = (audio_clk_div==1);
-(*keep*) wire audio_fifo_reset = RESET;
+(*keep*) wire audio_fifo_reset = RESET | msu_trig_play;
 (*keep*) wire audio_fifo_full;
-(*keep*) wire audio_fifo_wr = !audio_fifo_full && sd_ack && sd_buff_wr && msu_audio_play && !msu_trackmounting;
-(*keep*) wire [10:0] audio_fifo_usedw;
+//(*keep*) wire audio_fifo_wr = !audio_fifo_full && sd_ack && sd_buff_wr && msu_audio_play && !msu_trackmounting;
+(*keep*) wire audio_fifo_wr = !audio_fifo_full && sd_ack && sd_buff_wr;
+(*keep*) wire [11:0] audio_fifo_usedw;
 (*keep*) wire audio_fifo_empty;
-(*keep*) wire audio_fifo_rd = !audio_fifo_empty && audio_clk_en && msu_audio_play && !msu_trackmounting;
+//(*keep*) wire audio_fifo_rd = !audio_fifo_empty && audio_clk_en && msu_audio_play && !msu_trackmounting;
+(*keep*) wire audio_fifo_rd = !audio_fifo_empty && audio_clk_en && msu_audio_play;
 (*keep*) wire [15:0] audio_fifo_dout;
 
 reg [15:0] msu_audio_l;
@@ -846,7 +860,7 @@ cd_audio_fifo cd_audio_fifo_inst (
 	.wrusedw(audio_fifo_usedw),
 	.data(sd_buff_din),
 	
-	.rdclk(clk_sys),
+	.rdclk(CLK_50M),
 	.rdreq(audio_fifo_rd),
 	.rdempty(audio_fifo_empty),
 	.q(audio_fifo_dout)
@@ -854,7 +868,7 @@ cd_audio_fifo cd_audio_fifo_inst (
 
 reg [20:0] msu_audio_start_frame = 21'd0;
 reg [20:0] msu_audio_current_frame = 21'd0;
-reg [20:0] msu_audio_end_frame = 21'd2097151; // 1MB (since 512KB sectors).
+reg [20:0] msu_audio_end_frame = 21'd2097151; // 1GB! (since 512KB sectors). 2,097,152 * 512 = 1,073,741,824 bytes = 1GB.
 
 // MSU Audio player state machine
 always @(posedge clk_sys) begin
@@ -875,7 +889,7 @@ always @(posedge clk_sys) begin
 	case (msu_audio_state)
 		0: if (msu_audio_play && !msu_trackmounting) begin
 			sd_lba <= msu_audio_current_frame;
-			sd_rd <= 1'b1;					// Go! (request a sector from the HPS).
+			sd_rd <= 1'b1;					// Go! (request a sector from the HPS). 256 WORDS. 512 BYTES.
 			msu_audio_state <= msu_audio_state + 1;
 		end
 		1: begin
@@ -892,7 +906,7 @@ always @(posedge clk_sys) begin
 			// end
 			//else
 			// "sd_ack" goes low after a sector has been transferred. 
-			if (!sd_ack && audio_fifo_usedw < 1535) begin
+			if (!sd_ack && audio_fifo_usedw < 256) begin
 				// Check if we've reached end_frame yet (and msu_audio_play is still set).
 				if (msu_audio_current_frame < msu_audio_end_frame && msu_audio_play) begin
 					msu_audio_current_frame <= msu_audio_current_frame + 1;
@@ -935,8 +949,12 @@ end
 // But this mux is needed anyway, to prevent possible DC offset on the output.
 // (the state of the FIFO output can be undefined when aclr is High.)
 //
-assign msu_audio_l = (msu_audio_play) ? samp_l : 16'h0000;
-assign msu_audio_r = (msu_audio_play) ? samp_r : 16'h0000;
+//assign msu_audio_l = (msu_audio_play) ? samp_l : 16'h0000;
+//assign msu_audio_r = (msu_audio_play) ? samp_r : 16'h0000;
+
+assign msu_audio_l = samp_l;
+assign msu_audio_r = samp_r;
+
 
 /////////////////////////  STATE SAVE/LOAD  /////////////////////////////
 
