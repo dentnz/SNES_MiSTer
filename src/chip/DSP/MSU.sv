@@ -14,17 +14,20 @@ module MSU(
 	output     [31:0] addr_out,
 	output reg [15:0] track_out,
 	input             track_mounting,
+	output reg        trig_play,
+	
 	output      [7:0] volume_out,
-	output            trig_play,
- 
+	 
 	output reg msu_status_audio_busy,
 	output reg msu_status_audio_repeat,
 	output reg msu_status_audio_playing,
-	output reg msu_status_track_missing,
+	
+	input  msu_status_track_missing,
 	
 	output reg [31:0] msu_data_addr,
 	input [7:0] msu_data_in,
-	input msu_status_data_busy
+	input msu_status_data_busy,
+	output reg msu_data_seek
 );
 
 assign volume_out = MSU_VOLUME;
@@ -66,7 +69,7 @@ assign msu_status_audio_busy = ~track_mounting;
 
 (*keep*) wire IO_BANK_SEL = (ADDR[23:16]>=8'h00 && ADDR[23:16]<=8'h3F) || (ADDR[23:16]>=8'h80 && ADDR[23:16]<=8'hBF);
 
-always @(posedge CLK) begin
+always @(posedge CLK or negedge RST_N) begin
 	if (~RST_N) begin
         // Handle RESET
         MSU_SEEK <= 0;
@@ -74,10 +77,15 @@ always @(posedge CLK) begin
         MSU_VOLUME <= 0;
         MSU_CONTROL <= 0;
         DOUT <= 0;
+		  trig_play <= 1'b0;
+		  msu_data_seek <= 1'b0;
     end else begin
         // reset our play trigger
         trig_play <= 1'b0;
 
+		  msu_data_seek <= 1'b0;
+		  
+		  
         // Register writes
         if (ENABLE & ~WR_N & IO_BANK_SEL)   begin
             case (ADDR[15:0])
@@ -96,7 +104,8 @@ always @(posedge CLK) begin
 					// Data seek address. MSU_SEEK, MSB byte.
 					16'h2003: begin
 						//MSU_SEEK[31:24] <= DIN;
-						msu_data_addr <= {DIN, MSU_SEEK[23:0]};	// A write to 0x2003 triggers the update of msu_data_addr.
+						msu_data_addr <= {DIN, MSU_SEEK[23:0]};	// A write to 0x2003 triggers the update of msu_data_addr...
+						msu_data_seek <= 1'b1;							// And a pulse of msu_data_seek.
 					end
 					// MSU_Track LSB
 					16'h2004: begin
@@ -111,12 +120,12 @@ always @(posedge CLK) begin
 					end
 					// MSU Audio Volume. (MSU_VOLUME).
 					16'h2006: begin
-					MSU_VOLUME <= DIN;
+						MSU_VOLUME <= DIN;
 					end
 					// MSU Audio state control. (MSU_CONTROL).
 					16'h2007: begin
-					msu_status_audio_playing <= DIN[0];
-					msu_status_audio_repeat  <= DIN[1];
+						msu_status_audio_playing <= DIN[0];
+						msu_status_audio_repeat  <= DIN[1];
 					end
 					default:;
 				endcase 
