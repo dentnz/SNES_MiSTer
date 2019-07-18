@@ -994,6 +994,7 @@ else begin
 
 	if (reset) begin
 		msu_data_busy <= 1'b0;	// Should maybe have this set HIGH after reset, but TESTING for now! ElectronAsh.
+		msu_data_sector_old <= 23'h000000;
 	end
 	else begin
 		case (msu_data_state)
@@ -1036,7 +1037,7 @@ reg [15:0] msu_data_buff [0:255];
 (*noprune*) reg [1:0] msu_data_state = 2'd0;
 (*noprune*) reg [7:0] msu_data_wordcount = 2'd0;
 
-reg [22:0] msu_data_sector_old = 23'h7DBEEF;
+reg [22:0] msu_data_sector_old = 23'h000000;
 
 assign msu_data_in = (!msu_data_addr[0]) ? msu_data_buff[msu_data_addr[31:1]][7:0] : msu_data_buff[msu_data_addr[31:1]][15:8];
 

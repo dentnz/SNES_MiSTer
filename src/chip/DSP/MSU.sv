@@ -79,6 +79,7 @@ always @(posedge CLK or negedge RST_N) begin
         DOUT <= 0;
 		  trig_play <= 1'b0;
 		  msu_data_seek <= 1'b0;
+		  msu_data_addr <= 32'h00000000;
     end else begin
         // reset our play trigger
         trig_play <= 1'b0;

@@ -295,7 +295,7 @@ wire       extended = (~pressed ? (ps2_key_raw[23:16] == 8'he0) : (ps2_key_raw[1
 
 reg sd_ack_int = 0;
 
-reg [3:0] sd_ack_d = 0;
+reg [3:0] sd_ack_d = 4'b0000;
 
 wire [31:0] sd_lba_mux = (slot_0_active) ? sd_lba_0 :
 								 (slot_1_active) ? sd_lba_1 :
@@ -324,34 +324,41 @@ always@(posedge clk_sys) begin
 	
 // sd_cmd = {2'b00, sd_wr[3], sd_wr[2], sd_wr[1], sd_rd[3], sd_rd[2], sd_rd[1], 4'b0101, sd_conf, 1'b1, sd_wr[0], sd_rd[0]};	// Just for notes. ElectronAsh.
 //
-	// Defaults.
-	sd_cmd[0] <= 0;
-	sd_cmd[1] <= 0;
-	sd_cmd[8] <= 0;
-	sd_cmd[9] <= 0;
-	sd_cmd[10] <= 0;
-	sd_cmd[11] <= 0;
-	sd_cmd[12] <= 0;
-	sd_cmd[13] <= 0;
+
 
 	if (status[0]) begin	// RESET bit, from the HPS.
 		slot_0_active <= 1'b0;
 		slot_1_active <= 1'b0;
 		slot_2_active <= 1'b0;
 		slot_3_active <= 1'b0;
+		sd_cmd[0] <= 0;
+		sd_cmd[1] <= 0;
+		sd_cmd[8] <= 0;
+		sd_cmd[9] <= 0;
+		sd_cmd[10] <= 0;
+		sd_cmd[11] <= 0;
+		sd_cmd[12] <= 0;
+		sd_cmd[13] <= 0;
 	end
 	else begin
-		// sd_rd / sd_wr Arbiter.
+		// Defaults.
+		sd_cmd[0] <= 0;
+		sd_cmd[1] <= 0;
+		sd_cmd[8] <= 0;
+		sd_cmd[9] <= 0;
+		sd_cmd[10] <= 0;
+		sd_cmd[11] <= 0;
+		sd_cmd[12] <= 0;
+		sd_cmd[13] <= 0;
+	
+		// sd_rd / sd_wr Arbiter / Priority encoder.
 			  if (sd_rd[0] && !slot_1_active && !slot_2_active && !slot_3_active) begin sd_cmd[0]  <= 1; slot_0_active <= 1; end
 		else if (sd_wr[0] && !slot_1_active && !slot_2_active && !slot_3_active) begin sd_cmd[1]  <= 1; slot_0_active <= 1; end
-		
-			  if (sd_rd[1] && !slot_0_active && !slot_2_active && !slot_3_active) begin sd_cmd[8]  <= 1; slot_1_active <= 1; end
+		else if (sd_rd[1] && !slot_0_active && !slot_2_active && !slot_3_active) begin sd_cmd[8]  <= 1; slot_1_active <= 1; end
 		else if (sd_wr[1] && !slot_0_active && !slot_2_active && !slot_3_active) begin sd_cmd[11] <= 1; slot_1_active <= 1; end
-		
-			  if (sd_rd[2] && !slot_0_active && !slot_1_active && !slot_3_active) begin sd_cmd[9]  <= 1; slot_2_active <= 1; end
+		else if (sd_rd[2] && !slot_0_active && !slot_1_active && !slot_3_active) begin sd_cmd[9]  <= 1; slot_2_active <= 1; end
 		else if (sd_wr[2] && !slot_0_active && !slot_1_active && !slot_3_active) begin sd_cmd[12] <= 1; slot_2_active <= 1; end
-
-			  if (sd_rd[3] && !slot_0_active && !slot_1_active && !slot_2_active) begin sd_cmd[10] <= 1; slot_3_active <= 1; end
+		else if (sd_rd[3] && !slot_0_active && !slot_1_active && !slot_2_active) begin sd_cmd[10] <= 1; slot_3_active <= 1; end
 		else if (sd_wr[3] && !slot_0_active && !slot_1_active && !slot_2_active) begin sd_cmd[13] <= 1; slot_3_active <= 1; end
 		
 		sd_cmd[2] <= 1'b1;
