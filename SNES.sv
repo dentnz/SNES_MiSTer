@@ -504,14 +504,10 @@ main main
 	.AUDIO_R(MAIN_AUDIO_R)
 );
 
-// @todo clamping and all that stuff?!
-wire signed [16:0] AUDIO_MIX_L = $signed({MAIN_AUDIO_L[15],MAIN_AUDIO_L}) + $signed({msu_audio_l[15],msu_audio_l});
-wire signed [16:0] AUDIO_MIX_R = $signed({MAIN_AUDIO_R[15],MAIN_AUDIO_R}) + $signed({msu_audio_r[15],msu_audio_r});
+wire signed [16:0] AUDIO_MIX_L = $signed({MAIN_AUDIO_L[15], MAIN_AUDIO_L}) + $signed({msu_audio_l[15], msu_audio_l});
+wire signed [16:0] AUDIO_MIX_R = $signed({MAIN_AUDIO_R[15], MAIN_AUDIO_R}) + $signed({msu_audio_r[15], msu_audio_r});
 assign AUDIO_L = AUDIO_MIX_L[16:1];
 assign AUDIO_R = AUDIO_MIX_R[16:1];
-
-//assign AUDIO_L = msu_audio_l;
-//assign AUDIO_R = msu_audio_r;
 
 ////////////////////////////  CODES  ///////////////////////////////////
 
@@ -812,8 +808,9 @@ reg [15:0] samp_r;
 reg [9:0] audio_clk_div = 0;
 
 always @(posedge CLK_50M) begin
-	if (sd_ack[1] && sd_lba[1]==0 && msu_audio_word_count==4) left_chan <= 1'b1;	// The first sample of a MSU PCM file should be the LEFT sample. (ignoring the two header words).
-																											// The rest of the samples should be contiguously interleaved (LEFt/RIGHT) from that point on.
+	// The first sample of a MSU PCM file should be the LEFT sample. (ignoring the two header words).
+	if (sd_ack[1] && sd_lba[1]==0 && msu_audio_word_count==4) left_chan <= 1'b1;	
+	// The rest of the samples should be contiguously interleaved (LEFt/RIGHT) from that point on.
 	if (audio_clk_div > 0) audio_clk_div <= audio_clk_div - 1;	
 	else begin
 		left_chan <= !left_chan;
@@ -866,9 +863,10 @@ cd_audio_fifo cd_audio_fifo_inst (
 
 reg [20:0] msu_audio_start_frame = 21'd0;
 reg [20:0] msu_audio_current_frame = 21'd0;
-reg [20:0] msu_audio_end_frame = 21'd2097151; // 1GB! (since 512KB sectors). 2,097,152 * 512 = 1,073,741,824 bytes = 1GB.
-
-reg [7:0] msu_audio_word_count = 8'd0;	// Counts the 16-bit WORDs of each SECTOR. (WORDs 0-255).
+// 1GB! (since 512KB sectors). 2,097,152 * 512 = 1,073,741,824 bytes = 1GB
+reg [20:0] msu_audio_end_frame = 21'd2097151; 
+// Counts the 16-bit WORDs of each SECTOR. (WORDs 0-255)
+reg [7:0] msu_audio_word_count = 8'd0;	
 
 (*noprune*) reg [31:0] msu_audio_loop_index = 32'h00000000;
 
@@ -891,18 +889,20 @@ always @(posedge clk_sys) begin
 		msu_audio_state <= 2'd0;
 		msu_audio_mode <= 2'd1;
 		msu_audio_play <= 0;
-		// @todo clear fifo? (don't need to, as RESET is hooked up to FIFO aclr. ;) ElectronAsh.
 	end
 	case (msu_audio_state)
 		0: if (msu_audio_play && !msu_trackmounting) begin
 			sd_lba[1] <= msu_audio_current_frame;
-			sd_rd[1] <= 1'b1;					// Go! (request a sector from the HPS). 256 WORDS. 512 BYTES.
+			// Go! (request a sector from the HPS). 256 WORDS. 512 BYTES
+			sd_rd[1] <= 1'b1;
 			msu_audio_state <= msu_audio_state + 1;
 		end
 		1: begin
-			if (sd_ack[1]) begin		// sd_ack goes high at the start of a sector transfer (and during).
+			// sd_ack goes high at the start of a sector transfer (and during)
+			if (sd_ack[1]) begin
 				sd_rd[1] <= 1'b0;
-				msu_audio_word_count <= 0;	// Sanity check.
+				// Sanity check
+				msu_audio_word_count <= 0;
 				msu_audio_state <= msu_audio_state + 1;
 			end
 		end
@@ -954,14 +954,6 @@ always @(posedge clk_sys) begin
 	endcase
 end
 
-// The MSU Audio FIFO should be getting cleared now when msu_audio_play==0.
-//
-// But this mux is needed anyway, to prevent possible DC offset on the output.
-// (the state of the FIFO output can be undefined when aclr is High.)
-//
-//assign msu_audio_l = (msu_audio_play) ? samp_l : 16'h0000;
-//assign msu_audio_r = (msu_audio_play) ? samp_r : 16'h0000;
-
 assign msu_audio_l = samp_l;
 assign msu_audio_r = samp_r;
 
@@ -984,7 +976,7 @@ always @(posedge clk_sys) begin
 	old_downloading <= cart_download;
 	if(~old_downloading & cart_download) bk_ena <= 0;
 	
-	//Save file always mounted in the end of downloading state.
+	// Save file always mounted in the end of downloading state.
 	if(cart_download && img_mounted && !img_readonly) bk_ena <= |ram_mask;
 end
 

@@ -32,7 +32,6 @@ assign volume_out = MSU_VOLUME;
 // Read 'registers'
 // MSU_STATUS - $2000
 // Status bits
-
 localparam [2:0] msu_status_revision = 3'b001;
 wire [7:0] MSU_STATUS = {msu_status_data_busy, msu_status_audio_busy, msu_status_audio_repeat, msu_status_audio_playing, msu_status_track_missing, msu_status_revision}; 
 
@@ -61,9 +60,9 @@ reg  [7:0] MSU_CONTROL;                   // $2007
 reg [31:0] MSU_ADDR;
 
 assign addr_out = MSU_ADDR;
-//assign track_out = MSU_TRACK;
 assign msu_status_audio_busy = ~track_mounting;
 
+// Make sure we are aware of which bank ADDR is currently in 
 (*keep*) wire IO_BANK_SEL = (ADDR[23:16]>=8'h00 && ADDR[23:16]<=8'h3F) || (ADDR[23:16]>=8'h80 && ADDR[23:16]<=8'hBF);
 
 always @(posedge CLK) begin
@@ -75,7 +74,7 @@ always @(posedge CLK) begin
         MSU_CONTROL <= 0;
         DOUT <= 0;
     end else begin
-        // reset our play trigger
+        // Reset our play trigger
         trig_play <= 1'b0;
 
         // Register writes
@@ -95,28 +94,29 @@ always @(posedge CLK) begin
 					end
 					// Data seek address. MSU_SEEK, MSB byte.
 					16'h2003: begin
-						//MSU_SEEK[31:24] <= DIN;
-						msu_data_addr <= {DIN, MSU_SEEK[23:0]};	// A write to 0x2003 triggers the update of msu_data_addr.
+                        // A write to 0x2003 triggers the update of msu_data_addr.
+						msu_data_addr <= {DIN, MSU_SEEK[23:0]};
 					end
 					// MSU_Track LSB
 					16'h2004: begin
-					  MSU_TRACK[7:0] <= DIN;
+					    MSU_TRACK[7:0] <= DIN;
 					end
 					// MSU_Track MSB
 					16'h2005: begin    
-					  MSU_TRACK[15:8] <= DIN;
-					  track_out <= {DIN, MSU_TRACK[7:0]};	// Only update track_out when both (upper and lower) bytes arrive. ElectronAsh.
-					  // trigger play... will be reset on next CLK
-					  trig_play <= 1;
+					    MSU_TRACK[15:8] <= DIN;
+                        // Only update track_out when both (upper and lower) bytes arrive. ElectronAsh.
+					    track_out <= {DIN, MSU_TRACK[7:0]};	
+					    // trigger play... will be reset on next CLK
+					    trig_play <= 1;
 					end
 					// MSU Audio Volume. (MSU_VOLUME).
 					16'h2006: begin
-					MSU_VOLUME <= DIN;
+					    MSU_VOLUME <= DIN;
 					end
 					// MSU Audio state control. (MSU_CONTROL).
 					16'h2007: begin
-					msu_status_audio_playing <= DIN[0];
-					msu_status_audio_repeat  <= DIN[1];
+					    msu_status_audio_playing <= DIN[0];
+					    msu_status_audio_repeat  <= DIN[1];
 					end
 					default:;
 				endcase 
@@ -133,8 +133,7 @@ always @(posedge CLK) begin
                         // Data reads increase the memory address by 1
                         msu_data_addr <= msu_data_addr + 1;
                     end
-                    //DOUT <= MSU_READ;
-						  DOUT <= msu_data_in;
+					DOUT <= msu_data_in;
                 end
                 // MSU_ID
                 16'h2002: begin
