@@ -68,7 +68,11 @@ module hps_io #(parameter STRLEN=0, PS2DIV=0, WIDE=0, VDNUM=4, PS2WE=0)
 	output reg [63:0] img_size,     // size of image in bytes. valid only for active bit in img_mounted
 
 	// SD block level access
-	input      [31:0] sd_lba [0:VD],
+	input      [31:0] sd_lba_0,
+	input      [31:0] sd_lba_1,
+	input      [31:0] sd_lba_2,
+	input      [31:0] sd_lba_3,	
+	
 	input      [VD:0] sd_rd,       // only single sd_rd can be active at any given time
 	input      [VD:0] sd_wr,       // only single sd_wr can be active at any given time
 	output reg [VD:0] sd_ack,
@@ -291,12 +295,12 @@ wire       extended = (~pressed ? (ps2_key_raw[23:16] == 8'he0) : (ps2_key_raw[1
 
 reg sd_ack_int = 0;
 
-reg [3:0] sd_ack_d = 0;
+reg [3:0] sd_ack_d = 4'b0000;
 
-wire [31:0] sd_lba_mux = (slot_0_active) ? sd_lba[0] :
-								 (slot_1_active) ? sd_lba[1] :
-								 (slot_2_active) ? sd_lba[2] : 
-														 sd_lba[3];
+wire [31:0] sd_lba_mux = (slot_0_active) ? sd_lba_0 :
+								 (slot_1_active) ? sd_lba_1 :
+								 (slot_2_active) ? sd_lba_2 : 
+														 sd_lba_3;
 reg slot_0_active = 0;
 reg slot_1_active = 0;
 reg slot_2_active = 0;
@@ -320,45 +324,61 @@ always@(posedge clk_sys) begin
 	
 // sd_cmd = {2'b00, sd_wr[3], sd_wr[2], sd_wr[1], sd_rd[3], sd_rd[2], sd_rd[1], 4'b0101, sd_conf, 1'b1, sd_wr[0], sd_rd[0]};	// Just for notes. ElectronAsh.
 //
-	// Defaults.
-	sd_cmd[0] <= 0;
-	sd_cmd[1] <= 0;
-	sd_cmd[8] <= 0;
-	sd_cmd[9] <= 0;
-	sd_cmd[10] <= 0;
-	sd_cmd[11] <= 0;
-	sd_cmd[12] <= 0;
-	sd_cmd[13] <= 0;
 
-	// sd_rd / sd_wr Priority encoder.
-	     if (sd_rd[0]) begin sd_cmd[0]  <= 1; slot_0_active <= 1; end
-	else if (sd_wr[0]) begin sd_cmd[1]  <= 1; slot_0_active <= 1; end
-	
-	else if (sd_rd[1]) begin sd_cmd[8]  <= 1; slot_1_active <= 1; end
-	else if (sd_wr[1]) begin sd_cmd[11] <= 1; slot_1_active <= 1; end
-	
-	else if (sd_rd[2]) begin sd_cmd[9]  <= 1; slot_2_active <= 1; end
-	else if (sd_wr[2]) begin sd_cmd[12] <= 1; slot_2_active <= 1; end
 
-	else if (sd_rd[3]) begin sd_cmd[10] <= 1; slot_3_active <= 1; end
-	else if (sd_wr[3]) begin sd_cmd[13] <= 1; slot_3_active <= 1; end
+	if (status[0]) begin	// RESET bit, from the HPS.
+		slot_0_active <= 1'b0;
+		slot_1_active <= 1'b0;
+		slot_2_active <= 1'b0;
+		slot_3_active <= 1'b0;
+		sd_cmd[0] <= 0;
+		sd_cmd[1] <= 0;
+		sd_cmd[8] <= 0;
+		sd_cmd[9] <= 0;
+		sd_cmd[10] <= 0;
+		sd_cmd[11] <= 0;
+		sd_cmd[12] <= 0;
+		sd_cmd[13] <= 0;
+	end
+	else begin
+		// Defaults.
+		sd_cmd[0] <= 0;
+		sd_cmd[1] <= 0;
+		sd_cmd[8] <= 0;
+		sd_cmd[9] <= 0;
+		sd_cmd[10] <= 0;
+		sd_cmd[11] <= 0;
+		sd_cmd[12] <= 0;
+		sd_cmd[13] <= 0;
 	
-	sd_cmd[2] <= 1'b1;
-	sd_cmd[3] <= sd_conf;
-	sd_cmd[7:4] <= 4'h5;
-	sd_cmd[15:14] <= 2'b00;
-	
-	sd_ack_d <= sd_ack;
-	
-	sd_ack[0] <= slot_0_active && sd_ack_int;
-	sd_ack[1] <= slot_1_active && sd_ack_int;
-	sd_ack[2] <= slot_2_active && sd_ack_int;
-	sd_ack[3] <= slot_3_active && sd_ack_int;
-	
-	if ( (sd_ack_d[0] && !sd_ack[0]) ) begin slot_0_active <= 0; end
-	if ( (sd_ack_d[1] && !sd_ack[1]) ) begin slot_1_active <= 0; end
-	if ( (sd_ack_d[2] && !sd_ack[2]) ) begin slot_2_active <= 0; end
-	if ( (sd_ack_d[3] && !sd_ack[3]) ) begin slot_3_active <= 0; end
+		// sd_rd / sd_wr Arbiter / Priority encoder.
+			  if (sd_rd[0] && !slot_1_active && !slot_2_active && !slot_3_active) begin sd_cmd[0]  <= 1; slot_0_active <= 1; end
+		else if (sd_wr[0] && !slot_1_active && !slot_2_active && !slot_3_active) begin sd_cmd[1]  <= 1; slot_0_active <= 1; end
+		else if (sd_rd[1] && !slot_0_active && !slot_2_active && !slot_3_active) begin sd_cmd[8]  <= 1; slot_1_active <= 1; end
+		else if (sd_wr[1] && !slot_0_active && !slot_2_active && !slot_3_active) begin sd_cmd[11] <= 1; slot_1_active <= 1; end
+		else if (sd_rd[2] && !slot_0_active && !slot_1_active && !slot_3_active) begin sd_cmd[9]  <= 1; slot_2_active <= 1; end
+		else if (sd_wr[2] && !slot_0_active && !slot_1_active && !slot_3_active) begin sd_cmd[12] <= 1; slot_2_active <= 1; end
+		else if (sd_rd[3] && !slot_0_active && !slot_1_active && !slot_2_active) begin sd_cmd[10] <= 1; slot_3_active <= 1; end
+		else if (sd_wr[3] && !slot_0_active && !slot_1_active && !slot_2_active) begin sd_cmd[13] <= 1; slot_3_active <= 1; end
+		
+		sd_cmd[2] <= 1'b1;
+		sd_cmd[3] <= sd_conf;
+		sd_cmd[7:4] <= 4'h5;
+		sd_cmd[15:14] <= 2'b00;
+		
+		sd_ack[0] <= slot_0_active && sd_ack_int;
+		sd_ack[1] <= slot_1_active && sd_ack_int;
+		sd_ack[2] <= slot_2_active && sd_ack_int;
+		sd_ack[3] <= slot_3_active && sd_ack_int;
+		
+		sd_ack_d <= sd_ack;
+		
+		// Falling edge of each sd_ack clears its respective "active" flag.
+		if ( (sd_ack_d[0] && !sd_ack[0]) ) begin slot_0_active <= 0; end
+		if ( (sd_ack_d[1] && !sd_ack[1]) ) begin slot_1_active <= 0; end
+		if ( (sd_ack_d[2] && !sd_ack[2]) ) begin slot_2_active <= 0; end
+		if ( (sd_ack_d[3] && !sd_ack[3]) ) begin slot_3_active <= 0; end
+	end
 
 	
 	sd_buff_wr <= b_wr[0];

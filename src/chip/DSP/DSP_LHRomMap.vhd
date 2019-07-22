@@ -52,6 +52,14 @@ entity DSP_LHRomMap is
 		MSU_TRACKOUT      : out std_logic_vector(15 downto 0);
 		MSU_TRACKMOUNTING : in  std_logic;
 		MSU_TRIG_PLAY     : out std_logic;
+		MSU_VOLUME_OUT		: out std_logic_vector(7 downto 0);
+		MSU_REPEAT_OUT		: out std_logic;
+		MSU_AUDIO_PLAYING : out std_logic;
+		MSU_TRACK_MISSING : in  std_logic;
+		MSU_DATA_ADDR		: out std_logic_vector(31 downto 0);
+		MSU_DATA_IN			: in  std_logic_vector(7 downto 0);
+		MSU_DATA_BUSY		: in  std_logic;
+		MSU_DATA_SEEK		: out std_logic;
 		
 		BRK_OUT		: out std_logic;
 		DBG_REG		: in std_logic_vector(7 downto 0) := (others => '0');
@@ -99,11 +107,24 @@ architecture rtl of DSP_LHRomMap is
 			WR_N            : in  std_logic;
 			ADDR            : in  std_logic_vector(23 downto 0);
 			DIN             : in  std_logic_vector(7 downto 0);
-		    DOUT            : out std_logic_vector(7 downto 0);
+		   DOUT            : out std_logic_vector(7 downto 0);
 
 			track_out       : out std_logic_vector(15 downto 0);
 			track_mounting  : in  std_logic;
-			trig_play       : out std_logic
+			trig_play       : out std_logic;
+			
+			volume_out		 : out std_logic_vector(7 downto 0);
+			
+			msu_status_audio_busy 		: out std_logic;
+			msu_status_audio_repeat 	: out std_logic;
+			msu_status_audio_playing	: out std_logic;
+			
+			msu_status_track_missing 	: in std_logic;
+			
+			msu_data_addr			: out std_logic_vector(31 downto 0);
+			msu_data_in				: in std_logic_vector(7 downto 0);
+			msu_status_data_busy : in std_logic;
+			msu_data_seek			: out std_logic
 		);
 	end component;
 begin
@@ -269,7 +290,18 @@ begin
 
 		track_out     => MSU_TRACKOUT,
 		track_mounting=> MSU_TRACKMOUNTING,
-		trig_play     => MSU_TRIG_PLAY
+		trig_play     => MSU_TRIG_PLAY,
+		
+		volume_out => MSU_VOLUME_OUT,
+		
+		msu_status_audio_repeat => MSU_REPEAT_OUT,		-- OUTPUT.
+		msu_status_audio_playing => MSU_AUDIO_PLAYING,	-- OUTPUT.
+		msu_status_track_missing => MSU_TRACK_MISSING,	-- INPUT.
+		
+		msu_data_addr => MSU_DATA_ADDR,
+		msu_data_in => MSU_DATA_IN,
+		msu_status_data_busy => MSU_DATA_BUSY,
+		msu_data_seek => MSU_DATA_SEEK
 	);
 
 	ROM_RD <= (SYSCLKF_CE or SYSCLKR_CE) when rising_edge(MCLK);

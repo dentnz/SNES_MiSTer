@@ -59,6 +59,17 @@ module main
    output     [15:0] MSU_TRACKOUT,
    input             MSU_TRACKMOUNTING,
    output            MSU_TRIG_PLAY,
+	
+	output 		[7:0] MSU_VOLUME_OUT,
+	output				MSU_REPEAT_OUT,
+	output				MSU_AUDIO_PLAYING,
+	
+	input					MSU_TRACK_MISSING,
+	
+	output	  [31:0] MSU_DATA_ADDR,
+	input			[7:0] MSU_DATA_IN,
+	input					MSU_DATA_BUSY,
+	output				MSU_DATA_SEEK,
 
    input             BLEND,
    input             PAL,
@@ -253,7 +264,16 @@ DSP_LHRomMap DSP_LHRomMap
 
 	.msu_trackout(MSU_TRACKOUT),
 	.msu_trackmounting(MSU_TRACKMOUNTING),
-	.msu_trig_play(MSU_TRIG_PLAY)
+	.msu_trig_play(MSU_TRIG_PLAY),
+	
+	.msu_volume_out(MSU_VOLUME_OUT),
+	.msu_repeat_out(MSU_REPEAT_OUT),
+	.msu_audio_playing(MSU_AUDIO_PLAYING),
+	.msu_track_missing(MSU_TRACK_MISSING),
+	.msu_data_addr(MSU_DATA_ADDR),
+	.msu_data_in(MSU_DATA_IN),
+	.msu_data_busy(MSU_DATA_BUSY),
+	.msu_data_seek(MSU_DATA_SEEK)
 );
 `endif
 
