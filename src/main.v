@@ -70,6 +70,7 @@ module main
 	input			[7:0] MSU_DATA_IN,
 	input					MSU_DATA_BUSY,
 	output				MSU_DATA_SEEK,
+	output				MSU_DATA_REQ,
 
    input             BLEND,
    input             PAL,
@@ -273,7 +274,8 @@ DSP_LHRomMap DSP_LHRomMap
 	.msu_data_addr(MSU_DATA_ADDR),
 	.msu_data_in(MSU_DATA_IN),
 	.msu_data_busy(MSU_DATA_BUSY),
-	.msu_data_seek(MSU_DATA_SEEK)
+	.msu_data_seek(MSU_DATA_SEEK),
+	.msu_data_req(MSU_DATA_REQ)
 );
 `endif
 

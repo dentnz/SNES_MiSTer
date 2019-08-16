@@ -27,7 +27,9 @@ module MSU(
 	output reg [31:0] msu_data_addr,
 	input [7:0] msu_data_in,
 	input msu_status_data_busy,
-	output reg msu_data_seek
+	output reg msu_data_seek,
+	
+	output reg msu_data_req
 );
 
 assign volume_out = MSU_VOLUME;
@@ -90,6 +92,7 @@ always @(posedge CLK or negedge RST_N) begin
 		trig_play <= 1'b0;
 
 		msu_data_seek <= 1'b0;
+		msu_data_req <= 1'b0;	// Used for the "rdreq" input of the MSU data FIFO. ElectronAsh.
 
 		RD_N_1 <= RD_N;
 		WR_N_1 <= WR_N;
@@ -98,9 +101,9 @@ always @(posedge CLK or negedge RST_N) begin
 		// So the address increments AFTER the SNES has read the data from the CURRENT address.
 		if (ENABLE && IO_BANK_SEL && ADDR[15:0]==16'h2001 && (!RD_N_1 && RD_N) ) begin	// 0x2001 = MSU DATA Port.
 			msu_data_addr <= msu_data_addr + 1;
+			msu_data_req <= 1'b1;
 		end
 																																							
-
 		// FALLING edge of WR_N.
 		if (ENABLE && IO_BANK_SEL && ADDR[15:0]==16'h2003 && (WR_N_1 && !WR_N) ) begin	// 0x2003 = MSU SEEK Port.
 			msu_data_addr <= {DIN, MSU_SEEK[23:0]};	// A write to 0x2003 triggers the update of msu_data_addr...

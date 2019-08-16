@@ -60,6 +60,7 @@ entity DSP_LHRomMap is
 		MSU_DATA_IN			: in  std_logic_vector(7 downto 0);
 		MSU_DATA_BUSY		: in  std_logic;
 		MSU_DATA_SEEK		: out std_logic;
+		MSU_DATA_REQ		: out std_logic;
 		
 		BRK_OUT		: out std_logic;
 		DBG_REG		: in std_logic_vector(7 downto 0) := (others => '0');
@@ -124,7 +125,8 @@ architecture rtl of DSP_LHRomMap is
 			msu_data_addr			: out std_logic_vector(31 downto 0);
 			msu_data_in				: in std_logic_vector(7 downto 0);
 			msu_status_data_busy : in std_logic;
-			msu_data_seek			: out std_logic
+			msu_data_seek			: out std_logic;
+			msu_data_req			: out std_logic
 		);
 	end component;
 begin
@@ -301,7 +303,9 @@ begin
 		msu_data_addr => MSU_DATA_ADDR,
 		msu_data_in => MSU_DATA_IN,
 		msu_status_data_busy => MSU_DATA_BUSY,
-		msu_data_seek => MSU_DATA_SEEK
+		msu_data_seek => MSU_DATA_SEEK,
+		
+		msu_data_req => MSU_DATA_REQ
 	);
 
 	ROM_RD <= (SYSCLKF_CE or SYSCLKR_CE) when rising_edge(MCLK);

@@ -323,6 +323,7 @@ hps_io #(.STRLEN($size(CONF_STR)>>3), .WIDE(1)) hps_io
 	.sd_rd(sd_rd),
 	.sd_wr(sd_wr),
 	.sd_ack(sd_ack),
+	
 	.sd_buff_addr(sd_buff_addr),
 	.sd_buff_dout(sd_buff_dout),
 	.sd_buff_din(sd_buff_din),
@@ -433,6 +434,7 @@ wire [7:0] msu_data_in;
 reg msu_data_busy = 1'b0;
 
 wire msu_data_seek;
+wire msu_data_req;
 
 
 main main
@@ -459,6 +461,7 @@ main main
 	.MSU_DATA_IN(msu_data_in),
 	.MSU_DATA_BUSY(msu_data_busy),
 	.MSU_DATA_SEEK(msu_data_seek),
+	.MSU_DATA_REQ(msu_data_req),
 
 	.ROM_TYPE(rom_type),
 	.ROM_MASK(rom_mask),
@@ -839,8 +842,8 @@ lightgun lightgun
 
 reg left_chan = 0;
 reg [15:0] temp_l;
-reg [15:0] samp_l;
-reg [15:0] samp_r;
+reg signed [15:0] samp_l;
+reg signed [15:0] samp_r;
 reg [9:0] audio_clk_div = 0;
 
 always @(posedge CLK_50M) begin
@@ -912,9 +915,6 @@ if (reset) begin
 	msu_audio_mode <= 2'd1;
 	msu_audio_play <= 1'b0;
 	sd_rd[1] <= 1'b0;
-
-	msu_data_state <= 2'd0;
-	sd_rd[2] <= 1'b0;
 	
 	// @todo clear fifo? (don't need to, as RESET is hooked up to FIFO aclr. ;) ElectronAsh.
 end
@@ -931,6 +931,7 @@ else begin
 		msu_audio_play <= 1;
 	end
 
+	// Handle MSU Audio stuff...
 	case (msu_audio_state)
 		0: if (msu_audio_play && !msu_trackmounting) begin
 			sd_lba_1 <= msu_audio_current_frame;
@@ -962,6 +963,21 @@ else begin
 					sd_rd[1] <= 1'b1;
 					msu_audio_state <= 1;			// ..No, Loop back, to fetch another sector!
 				end
+				else begin
+					// 512 bytes per sector, so we would normally shift right by 9...
+					// But the "msu_audio_loop_index" value denotes the SAMPLE to loop back to.
+					// (one sample comprises of a stereo Left/Right 16-bit pair, so FOUR bytes per sample.)
+					// TODO: Loop to the actual SAMPLE offset rather than the SECTOR. ElectronAsh.
+					if (msu_repeat_out) begin
+						msu_audio_current_frame <= msu_audio_loop_index>>7;
+						msu_audio_state <= 0;	// Loop back, to jump to the sample loop sector. (will eventually skip to the exact sample too).
+					end
+					else begin	// No repeat, stop!
+						msu_audio_play <= 1'b0;
+						msu_audio_state <= 0;
+					end
+				end
+				
 				/*else begin
 					case (msu_audio_mode)
 					// 1: begin			// Repeat.
@@ -990,56 +1006,116 @@ else begin
 		end
 	default:; // Do nothing but wait
 	endcase
-	
-
-	if (reset) begin
-		msu_data_busy <= 1'b0;	// Should maybe have this set HIGH after reset, but TESTING for now! ElectronAsh.
-		msu_data_sector_old <= 23'h000000;
-	end
-	else begin
-		case (msu_data_state)
-		0: begin
-			if (/*msu_data_seek &&*/ ( msu_data_addr>>9 != msu_data_sector_old) ) begin	// Check to see if we've already read this sector
-				//msu_audio_play <= 1'b0;	// STOP audio playback when data is requested?
-				msu_data_sector_old <= msu_data_addr>>9;
-				sd_lba_2 <= msu_data_addr >> 9;	// Request the SECTOR that we need. (shift "msu_data_addr" by 9, to find which 512-byte sector the data is in).
-				sd_rd[2] <= 1'b1;
-				msu_data_busy <= 1'b1;		// TESTING!!
-				msu_data_wordcount <= 8'd0;
-				msu_data_state <= msu_data_state + 1;
-			end
-		end
-			
-		1: if (sd_ack[2]) begin		// Sector transfer has started. (Need to check sd_ack[2], so we know the data is for us.)
-			sd_rd[2] <= 1'b0;
-			msu_data_state <= msu_data_state + 1;
-		end
-		
-		2: begin
-			if (sd_buff_wr) begin
-				msu_data_buff[msu_data_wordcount] <= sd_buff_dout;	// Write one WORD to the data buffer every time sd_buff_wr pulses HIGH.
-				msu_data_wordcount <= msu_data_wordcount + 1;		// Increment the word count.
-			end
-			
-			if (!sd_ack[2]) begin							// If sd_ack[2] goes LOW, then the sector transfer has finished.
-				msu_data_busy <= 1'b0;						// Let the MSU know it can read the data byte.
-				msu_data_state <= 0;							// Back to idle state.
-			end
-		end
-		
-		default:;
-		endcase
-	end
 end
 
 
-reg [15:0] msu_data_buff [0:255];
+
+// MSU Data track reading state machine
+always @(posedge clk_sys or posedge reset)
+if (reset) begin
+	msu_data_state <= 8'd0;
+	allow_data_fifo_wr <= 1'b1;
+	sd_rd[2] <= 1'b0;
+	msu_data_busy <= 1'b0;	// Should maybe have this set HIGH after reset, but TESTING for now! ElectronAsh.
+end
+else begin
+	msu_data_addr_bit1_old <= msu_data_addr[1];
+
+	if (msu_data_seek) msu_data_busy <= 1'b1;
+	
+	case (msu_data_state)
+	0: begin
+		if (msu_data_busy) begin
+			sd_lba_2 <= msu_data_sector;						// A new msu_seek uses the sector offset directly...
+			msu_data_state <= msu_data_state + 1;
+		end
+		else if (msu_data_fifo_usedw < 12'd3583) begin	// But the rest of the time, we're loading new sectors into the FIFO as quickly as possible
+			sd_lba_2 <= sd_lba_2 + 1;							// (when it has enough space).
+			msu_data_state <= msu_data_state + 1;
+		end
+	end
+		
+	// Request a sector from the HPS (sd_lba_2 has to be set in the previous state)...
+	1: begin
+		sd_rd[2] <= 1'b1;
+		msu_data_wordcount <= 8'd0;
+			
+		if (msu_data_byte_offset>0) allow_data_fifo_wr <= 1'b0;	// If the byte offset (within a sector boundary) is non-zero, then we have to
+		else allow_data_fifo_wr <= 1'b1;									// inhibit writes to the data FIFO until we see the correct offset.
+			
+		msu_data_state <= msu_data_state + 1;
+	end
+		
+	2: if (sd_ack[2]) begin		// Sector transfer has started. (Need to check sd_ack[2], so we know the data is for us.)
+		sd_rd[2] <= 1'b0;
+		msu_data_state <= msu_data_state + 1;
+	end
+	
+	3: begin
+		// Only allow writes to the FIFO once the current WORD offset (from the HPS transfer) matches the requested WORD offset (from the MSU)...
+		if (msu_data_wordcount >= msu_data_byte_offset>>1) allow_data_fifo_wr <= 1'b1;
+	
+		if (sd_buff_wr) begin
+			msu_data_wordcount <= msu_data_wordcount + 1;	// Increment the word count.
+		end
+		
+		if (!sd_ack[2]) begin							// If sd_ack[2] goes LOW, then the sector transfer has finished.
+			msu_data_busy <= 1'b0;						// Let the MSU know the seek has finished.
+			msu_data_state <= 0;							// Back to state 0. (further sectors will get fetched into the FIFO at state 0.)
+		end
+	end
+	
+	default:;
+	endcase
+end
+
+
+wire [22:0] msu_data_sector = msu_data_addr[31:9];
+wire [8:0] msu_data_byte_offset = msu_data_addr[8:0];
+
+
+wire msu_data_fifo_clear = msu_data_seek;	// Clear the FIFO, for only ONE clock pulse, else it will clear the first sector we transfer.
+
+reg allow_data_fifo_wr;	// Flag used to inhibit writes to the data FIFO when the seek address is not on a 512-byte sector boundary.
+wire msu_data_fifo_wr = !msu_data_fifo_full && allow_data_fifo_wr && sd_ack[2] && sd_buff_wr;
+
+wire [15:0] msu_data_fifo_dout;
+
+wire msu_data_fifo_empty;
+wire msu_data_fifo_full;
+wire [11:0] msu_data_fifo_usedw;
+
+reg msu_data_addr_bit1_old;
+wire msu_data_fifo_rdreq = msu_data_req && (msu_data_addr_bit1_old != msu_data_addr[1]);
+
+msu_data_fifo	msu_data_fifo_inst (
+	.clock ( clk_sys ),
+
+	.aclr ( msu_data_fifo_clear ),
+	
+	.data ( sd_buff_dout ),				// Sector data, from the HPS. 16-bit wide.
+	.wrreq ( msu_data_fifo_wr ),
+	
+	.rdreq ( msu_data_fifo_rdreq ),
+	.q ( msu_data_fifo_dout ),
+	
+	.empty ( msu_data_fifo_empty ),
+	.full ( msu_data_fifo_full ),
+	
+	.usedw ( msu_data_fifo_usedw )
+);
+
+
+
 (*noprune*) reg [1:0] msu_data_state = 2'd0;
 (*noprune*) reg [7:0] msu_data_wordcount = 2'd0;
 
-reg [22:0] msu_data_sector_old = 23'h000000;
 
-assign msu_data_in = (!msu_data_addr[0]) ? msu_data_buff[msu_data_addr[31:1]][7:0] : msu_data_buff[msu_data_addr[31:1]][15:8];
+// Select the lower or upper byte from the 16-bit data from the buffer, depending on the LSB bit of msu_data_addr...
+// (because hps_io is set up to transfer 16-bit words, which is handy for audio track playback, but msu_data reads are 8-bit.) ElectronAsh.
+//assign msu_data_in = (!msu_data_addr[0]) ? msu_data_buff[msu_data_addr[31:1]][7:0] : msu_data_buff[msu_data_addr[31:1]][15:8];
+assign msu_data_in = (!msu_data_addr[0]) ? msu_data_fifo_dout[7:0] : msu_data_fifo_dout[15:8];
+
 
 
 // The MSU Audio FIFO should be getting cleared now when msu_audio_play==0.
@@ -1047,14 +1123,16 @@ assign msu_data_in = (!msu_data_addr[0]) ? msu_data_buff[msu_data_addr[31:1]][7:
 // But this mux is needed anyway, to prevent possible DC offset on the output.
 // (the state of the FIFO output can be undefined when aclr is High.)
 //
-assign msu_audio_l = (msu_audio_play) ? samp_l : 16'h0000;
-assign msu_audio_r = (msu_audio_play) ? samp_r : 16'h0000;
+//assign msu_audio_l = (msu_audio_play) ? samp_l : 16'h0000;
+//assign msu_audio_r = (msu_audio_play) ? samp_r : 16'h0000;
 
-//wire signed [24:0] msu_vol_mix_l = {samp_l[15],samp_l} * msu_volume_out;
-//wire signed [24:0] msu_vol_mix_r = {samp_r[15],samp_r} * msu_volume_out;
+wire signed [8:0] msu_vol_signed = msu_volume_out;
 
-//assign msu_audio_l = (msu_audio_play) ? msu_vol_mix_l[24:9] : 16'h0000;
-//assign msu_audio_r = (msu_audio_play) ? msu_vol_mix_r[24:9] : 16'h0000;
+wire signed [23:0] msu_vol_mix_l = samp_l * msu_vol_signed;
+wire signed [23:0] msu_vol_mix_r = samp_r * msu_vol_signed;
+
+assign msu_audio_l = (msu_audio_play) ? msu_vol_mix_l[23:8] : 16'h0000;
+assign msu_audio_r = (msu_audio_play) ? msu_vol_mix_r[23:8] : 16'h0000;
 
 
 /////////////////////////  STATE SAVE/LOAD  /////////////////////////////
