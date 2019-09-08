@@ -49,17 +49,18 @@ entity DSP_LHRomMap is
 		ROM_MASK    : in std_logic_vector(23 downto 0);
 		BSRAM_MASK	: in std_logic_vector(23 downto 0);
 
-		MSU_TRACKOUT      : out std_logic_vector(15 downto 0);
-		MSU_TRACKMOUNTING : in  std_logic;
-		MSU_TRIG_PLAY     : out std_logic;
-		MSU_VOLUME_OUT		: out std_logic_vector(7 downto 0);
-		MSU_REPEAT_OUT		: out std_logic;
-		MSU_AUDIO_PLAYING : out std_logic;
-		MSU_TRACK_MISSING : in  std_logic;
-		MSU_DATA_ADDR		: out std_logic_vector(31 downto 0);
-		MSU_DATA_IN			: in  std_logic_vector(7 downto 0);
-		MSU_DATA_BUSY		: in  std_logic;
-		MSU_DATA_SEEK		: out std_logic;
+		MSU_TRACKOUT          : out std_logic_vector(15 downto 0);
+		MSU_TRACKMOUNTING     : in  std_logic;
+		MSU_TRIG_PLAY         : out std_logic;
+		MSU_VOLUME_OUT		  : out std_logic_vector(7 downto 0);
+		MSU_REPEAT_OUT		  : out std_logic;
+		MSU_AUDIO_PLAYING_IN  : in  std_logic;
+		MSU_AUDIO_PLAYING_OUT : out std_logic;
+		MSU_TRACK_MISSING     : in  std_logic;
+		MSU_DATA_ADDR		  : out std_logic_vector(31 downto 0);
+		MSU_DATA_IN           : in  std_logic_vector(7 downto 0);
+		MSU_DATA_BUSY		  : in  std_logic;
+		MSU_DATA_SEEK		  : out std_logic;
 		
 		BRK_OUT		: out std_logic;
 		DBG_REG		: in std_logic_vector(7 downto 0) := (others => '0');
@@ -107,7 +108,7 @@ architecture rtl of DSP_LHRomMap is
 			WR_N            : in  std_logic;
 			ADDR            : in  std_logic_vector(23 downto 0);
 			DIN             : in  std_logic_vector(7 downto 0);
-		   DOUT            : out std_logic_vector(7 downto 0);
+		    DOUT            : out std_logic_vector(7 downto 0);
 
 			track_out       : out std_logic_vector(15 downto 0);
 			track_mounting  : in  std_logic;
@@ -117,7 +118,8 @@ architecture rtl of DSP_LHRomMap is
 			
 			msu_status_audio_busy 		: out std_logic;
 			msu_status_audio_repeat 	: out std_logic;
-			msu_status_audio_playing	: out std_logic;
+			msu_status_audio_playing_in : in  std_logic;
+			msu_status_audio_playing_out: out std_logic;
 			
 			msu_status_track_missing 	: in std_logic;
 			
@@ -294,9 +296,10 @@ begin
 		
 		volume_out => MSU_VOLUME_OUT,
 		
-		msu_status_audio_repeat => MSU_REPEAT_OUT,		-- OUTPUT.
-		msu_status_audio_playing => MSU_AUDIO_PLAYING,	-- OUTPUT.
-		msu_status_track_missing => MSU_TRACK_MISSING,	-- INPUT.
+		msu_status_audio_repeat => MSU_REPEAT_OUT,		       
+		msu_status_audio_playing_in => MSU_AUDIO_PLAYING_IN,
+		msu_status_audio_playing_out => MSU_AUDIO_PLAYING_OUT,
+		msu_status_track_missing => MSU_TRACK_MISSING, -- INPUT
 		
 		msu_data_addr => MSU_DATA_ADDR,
 		msu_data_in => MSU_DATA_IN,

@@ -279,8 +279,8 @@ wire [24:0] ps2_mouse;
 
 wire  [7:0] joy0_x,joy0_y,joy1_x,joy1_y;
 
-reg  [15:0] msu_trackout;
-reg   		msu_trackmounting;
+reg  [15:0] msu_trackout = 0;
+reg   		msu_trackmounting = 0;
 
 hps_io #(.STRLEN($size(CONF_STR)>>3), .WIDE(1)) hps_io
 (
@@ -424,16 +424,13 @@ reg msu_trig_play;
 
 wire [7:0] msu_volume_out;
 wire msu_repeat_out;
-wire msu_audio_playing;
-
+wire msu_audio_playing = msu_audio_play;
+wire msu_audio_playing_out;
 wire msu_track_missing = 1'b0;
-
 wire [31:0] msu_data_addr;
 wire [7:0] msu_data_in;
 reg msu_data_busy = 1'b0;
-
 wire msu_data_seek;
-
 
 main main
 (
@@ -451,7 +448,8 @@ main main
 	
 	.MSU_VOLUME_OUT(msu_volume_out),
 	.MSU_REPEAT_OUT(msu_repeat_out),
-	.MSU_AUDIO_PLAYING(msu_audio_playing),
+	.MSU_AUDIO_PLAYING_IN(msu_audio_playing),
+	.MSU_AUDIO_PLAYING_OUT(msu_audio_playing_out),
 	
 	.MSU_TRACK_MISSING(msu_track_missing),
 	
@@ -828,10 +826,9 @@ lightgun lightgun
 (*noprune*) reg msu_audio_play = 0;
 
 // For the state machine 'step'
-(*noprune*) reg [1:0] msu_audio_state = 2'd0;
+//(*noprune*) reg [1:0] msu_audio_state = 2'd0;
 // Current mounted files mode (e.g repeat)
-(*noprune*) reg [1:0] msu_audio_mode = 0;
-
+//(*noprune*) reg [1:0] msu_audio_mode = 2'd1;
 
 reg left_chan = 0;
 reg [15:0] temp_l;
@@ -842,6 +839,7 @@ reg [9:0] audio_clk_div = 0;
 always @(posedge CLK_50M) begin
 	// The first sample of a MSU PCM file should be the LEFT sample. (ignoring the two header words).
 	// The rest of the samples should be contiguously interleaved (LEFt/RIGHT) from that point on.
+	// @todo this will not work for a non-zero loop point
 	if (sd_ack[1] && sd_lba_1==0 && msu_audio_word_count==4) left_chan <= 1'b1;	
 	
 	if (audio_clk_div > 0) audio_clk_div <= audio_clk_div - 1;	
@@ -863,13 +861,13 @@ end
 // followed by two more words that contain the loop index (in SAMPLES), for when repeat mode is active.
 //
 // (sd_lba_1==0, to check only the first sector).
-wire msu_header_skip = sd_lba_1==0 && (msu_audio_word_count>=0 && msu_audio_word_count<=3);
+wire msu_header_skip = sd_lba_1==0 && (msu_audio_word_count >= 0 && msu_audio_word_count <= 3);
 
 (*keep*) wire audio_clk_en = (audio_clk_div==1);
 (*keep*) wire audio_fifo_reset = RESET | msu_trig_play;
 (*keep*) wire audio_fifo_full;
 //(*keep*) wire audio_fifo_wr = !audio_fifo_full && sd_ack[1] && sd_buff_wr && msu_audio_play && !msu_trackmounting;
-(*keep*) wire audio_fifo_wr = !audio_fifo_full && sd_ack[1] && sd_buff_wr && !msu_header_skip;
+(*keep*) wire audio_fifo_wr = !audio_fifo_full && sd_ack[1] && sd_buff_wr && !msu_header_skip && !ignore_sd_buffer_out;
 (*keep*) wire [11:0] audio_fifo_usedw;
 (*keep*) wire audio_fifo_empty;
 //(*keep*) wire audio_fifo_rd = !audio_fifo_empty && audio_clk_en && msu_audio_play && !msu_trackmounting;
@@ -894,104 +892,149 @@ cd_audio_fifo cd_audio_fifo_inst (
 	.q(audio_fifo_dout)
 );
 
-
-reg [20:0] msu_audio_start_frame = 21'd0;
-reg [20:0] msu_audio_current_frame = 21'd0;
+// reg [20:0] msu_audio_start_frame = 21'd0;
+// reg [20:0] msu_audio_current_frame = 21'd0;
 // 1GB! (since 512KB sectors). 2,097,152 * 512 = 1,073,741,824 bytes = 1GB
-reg [20:0] msu_audio_end_frame = 21'd2097151; 
+// reg [20:0] msu_audio_end_frame = 21'd2097151; 
 // Counts the 16-bit WORDs of each SECTOR. (WORDs 0-255)
-reg [7:0] msu_audio_word_count = 8'd0;	
+// reg [7:0] msu_audio_word_count = 8'd0;	
 
-(*noprune*) reg [31:0] msu_audio_loop_index = 32'h00000000;
+//(*noprune*) reg [31:0] msu_audio_loop_index = 32'h00000000;
 
-// MSU Audio player state machine
-always @(posedge clk_sys or posedge reset)
-if (reset) begin
-	msu_audio_state <= 2'd0;
-	msu_audio_mode <= 2'd1;
-	msu_audio_play <= 1'b0;
-	sd_rd[1] <= 1'b0;
+// reg msu_trackmounting_1 = 0;
+// wire msu_trackmounting_falling = (msu_trackmounting_1 && !msu_trackmounting);
+// wire img_size_end_frame = img_size >> 9;
+// wire msu_audio_end_frame_byte_offset = img_size[8:0];
+wire sd_ack_1 = sd_ack[1];
+//wire sd_rd_1 = sd_rd[1];
+reg ignore_sd_buffer_out = 0;
 
-	msu_data_state <= 2'd0;
-	sd_rd[2] <= 1'b0;
-	
-	// @todo clear fifo? (don't need to, as RESET is hooked up to FIFO aclr. ;) ElectronAsh.
-end
-else begin
-	// Sample loop point value is in little-endian!
-	if (sd_ack[1] && sd_lba_1==0 && msu_audio_word_count==2 && sd_buff_wr) msu_audio_loop_index[15:0]  <= sd_buff_dout;
-	if (sd_ack[1] && sd_lba_1==0 && msu_audio_word_count==3 && sd_buff_wr) msu_audio_loop_index[31:16] <= sd_buff_dout;
+msu_audio msu_audio_inst (
+	.clk(clk_sys),
+  	.reset(reset),
+  	.img_size(img_size),
+  	.trig_play(msu_trig_play),
+	.sd_ack_1(sd_ack[1]),
+  	.repeat_in(msu_repeat_out),
+  	.trackmounting(msu_trackmounting),
+  	.sd_buff_wr(sd_buff_wr),
+	.sd_buff_dout(sd_buff_dout),
+  	.audio_fifo_usedw(audio_fifo_usedw),  
+  	.sd_lba_1(sd_lba_1),
+	.ignore_sd_buffer_out(ignore_sd_buffer_out),
+  	.audio_play(msu_audio_play),
+	.word_count(msu_audio_word_count),
+  	.sd_rd_1(sd_rd[1])
+);
 
-	// We have a trigger to play...
-	if (msu_trig_play) begin
-		msu_audio_current_frame <= 0;
-		msu_audio_word_count <= 0;
-		msu_audio_state <= 0;
-		msu_audio_play <= 1;
-	end
+// MSU datafile state machine
+always @(posedge clk_sys or posedge reset) begin
+// if (reset) begin
+// 	msu_audio_state <= 2'd0;
+// 	msu_audio_mode <= 2'd1;
+// 	msu_audio_play <= 1'b0;
+// 	msu_audio_loop_index <= 0;
+// 	sd_rd[1] <= 1'b0;
 
-	case (msu_audio_state)
-		0: if (msu_audio_play && !msu_trackmounting) begin
-			sd_lba_1 <= msu_audio_current_frame;
-			sd_rd[1] <= 1'b1;					// Go! (request a sector from the HPS). 256 WORDS. 512 BYTES.
-			msu_audio_state <= msu_audio_state + 1;
-		end
-		1: begin
-			// sd_ack goes high at the start of a sector transfer (and during)
-			if (sd_ack[1]) begin
-				sd_rd[1] <= 1'b0;
-				// Sanity check
-				msu_audio_word_count <= 0;
-				msu_audio_state <= msu_audio_state + 1;
-			end
-		end
-		2: begin
-			if (sd_ack[1] && sd_buff_wr) msu_audio_word_count <= msu_audio_word_count + 1;
-		
-			// @todo handle stop and track changes
-			// if (cmd_buff[0]==8'h08) begin	// STOP CDDA playback as soon as a READ command is seen! TESTING !!!
-			// 	msu_audio_play <= 1'b0;
-			// 	msu_audio_state <= 0;
-			// end
-			//else
-			// "sd_ack" goes low after a sector has been transferred. 
-			if (!sd_ack[1] && audio_fifo_usedw < 1792) begin
-				// Check if we've reached end_frame yet (and msu_audio_play is still set).
-				if (msu_audio_current_frame < msu_audio_end_frame && msu_audio_play) begin
-					msu_audio_current_frame <= msu_audio_current_frame + 1;
-					sd_lba_1 <= sd_lba_1 + 1;
-					sd_rd[1] <= 1'b1;
-					msu_audio_state <= 1;			// ..No, Loop back, to fetch another sector!
-				end
-				/*else begin
-					case (msu_audio_mode)
-					// 1: begin			// Repeat.
-					// 	current_frame <= start_frame;	// Set back to the start frame.
-					// 	//cdda_play <= 1'b1;	// Keep playing (don't really need to set this again).
-					// 	cdda_state <= 0;
-					// end
-					// 2: begin			// IRQ when finished.
-					// 	cdda_status <= 2'd0;	// 0==CDDA Stopped. 1==CDDA Playing. 2==CDDA Paused.
-					// 	cdda_play <= 1'b0;
-					// 	DONE_FLAG <= 1'b1;	// This mode sets the IRQ_TRANSFER_DONE flag at the end of CDDA playback. (MAME).
-					// end
-					// 3: begin			// Play without repeat (STOP).
-					// 	cdda_status <= 2'd0;	// 0==CDDA Stopped. 1==CDDA Playing. 2==CDDA Paused.
-					// 	cdda_play <= 1'b0;
-					// 	cdda_state <= 0;		// Back to idle state. (won't restart unless cdda_play is set again.)
-					// end
-						1: begin // Played without repeat so time to stop
-							// set our status to not audio_playing
-							msu_audio_play <= 0;
-							msu_audio_state <= 0;
-						end
-					endcase
-				end*/
-			end
-		end
-	default:; // Do nothing but wait
-	endcase
-	
+// 	msu_data_state <= 2'd0;
+// 	sd_rd[2] <= 1'b0;
+// end
+// else begin
+// 	msu_trackmounting_1 <= msu_trackmounting;
+
+// 	// Sample loop point value is in little-endian! Measured in samples, where one sample is 4 bytes long
+// 	if (sd_ack[1] && sd_lba_1==0 && msu_audio_word_count==2 && sd_buff_wr) msu_audio_loop_index[15:0]  <= sd_buff_dout;
+// 	if (sd_ack[1] && sd_lba_1==0 && msu_audio_word_count==3 && sd_buff_wr) msu_audio_loop_index[31:16] <= sd_buff_dout;
+
+// 	// Determine file end
+// 	if (img_mounted[1]) begin
+// 		msu_audio_end_frame <= img_size_end_frame[20:0];
+// 	end
+
+// 	// We have a trigger to play...
+// 	if (msu_trig_play) begin
+// 		// Stop any existing audio playback
+// 		msu_audio_current_frame <= 0;
+// 		msu_audio_word_count <= 0;
+// 		msu_audio_state <= 0;
+// 		msu_audio_play <= 0;
+// 		// @todo think we should Remove previous loop point too... hopefully this doesn't clobber it being set above
+// 		msu_audio_loop_index <= 0;
+// 	end else begin
+// 		case (msu_audio_state)
+// 			0: if (msu_trackmounting_falling) begin
+// 				msu_audio_play <= 1'b1;
+// 				sd_lba_1 <= msu_audio_current_frame;
+// 				// Determine audio playback mode
+// 				if (msu_repeat_out) begin
+// 					msu_audio_mode <= 1;
+// 				end else begin
+// 					msu_audio_mode <= 2;
+// 				end
+// 				// Go! (request a sector from the HPS). 256 WORDS. 512 BYTES.
+// 				sd_rd[1] <= 1'b1;
+// 				msu_audio_state <= msu_audio_state + 1;
+// 			end
+// 			1: begin
+// 				// sd_ack goes high at the start of a sector transfer (and during)
+// 				if (sd_ack[1]) begin
+// 					sd_rd[1] <= 1'b0;
+// 					// Sanity check
+// 					msu_audio_word_count <= 0;
+// 					msu_audio_state <= msu_audio_state + 1;
+// 				end
+// 			end
+// 			2: begin
+// 				if (sd_ack[1] && sd_buff_wr) msu_audio_word_count <= msu_audio_word_count + 1;
+			
+// 				// @todo handle stop and track changes
+// 				// if (cmd_buff[0]==8'h08) begin	// STOP CDDA playback as soon as a READ command is seen! TESTING !!!
+// 				// 	msu_audio_play <= 1'b0;
+// 				// 	msu_audio_state <= 0;
+// 				// end
+// 				//else
+// 				// "sd_ack" goes low after a sector has been transferred. 
+// 				if (!sd_ack[1] && audio_fifo_usedw < 1792) begin
+// 					// Check if we've reached end_frame yet (and msu_audio_play is still set).
+// 					if (msu_audio_current_frame < msu_audio_end_frame && msu_audio_play) begin
+// 						msu_audio_current_frame <= msu_audio_current_frame + 1;
+// 						sd_lba_1 <= sd_lba_1 + 1;
+// 						sd_rd[1] <= 1'b1;
+// 						// ..No, Loop back, to fetch another sector!
+// 						msu_audio_state <= 1;
+// 					end else begin
+// 						// Need to deal with the final bytes of the last frame
+// 						case (msu_audio_mode)
+// 							// Audio not repeating
+// 							1: begin 
+// 								// set our status to not audio_playing
+// 								msu_audio_play <= 0;
+// 								msu_audio_state <= 0;
+// 							end
+// 							// Audio repeating
+// 							2: begin
+// 								// Set back to the start frame
+// 								msu_audio_current_frame <= 0;
+// 								sd_lba_1 <= 0;
+// 							end
+							
+// 						// 2: begin			// IRQ when finished.
+// 						// 	cdda_status <= 2'd0;	// 0==CDDA Stopped. 1==CDDA Playing. 2==CDDA Paused.
+// 						// 	cdda_play <= 1'b0;
+// 						// 	DONE_FLAG <= 1'b1;	// This mode sets the IRQ_TRANSFER_DONE flag at the end of CDDA playback. (MAME).
+// 						// end
+// 						// 3: begin			// Play without repeat (STOP).
+// 						// 	cdda_status <= 2'd0;	// 0==CDDA Stopped. 1==CDDA Playing. 2==CDDA Paused.
+// 						// 	cdda_play <= 1'b0;
+// 						// 	cdda_state <= 0;		// Back to idle state. (won't restart unless cdda_play is set again.)
+// 						// end
+// 						endcase
+// 					end
+// 				end
+// 			end
+// 		default:; // Do nothing but wait
+// 		endcase
+// 	end	
 
 	if (reset) begin
 		msu_data_busy <= 1'b0;	// Should maybe have this set HIGH after reset, but TESTING for now! ElectronAsh.
@@ -1003,7 +1046,7 @@ else begin
 			if (/*msu_data_seek &&*/ ( msu_data_addr>>9 != msu_data_sector_old) ) begin	// Check to see if we've already read this sector
 				//msu_audio_play <= 1'b0;	// STOP audio playback when data is requested?
 				msu_data_sector_old <= msu_data_addr>>9;
-				sd_lba_2 <= msu_data_addr >> 9;	// Request the SECTOR that we need. (shift "msu_data_addr" by 9, to find which 512-byte sector the data is in).
+				sd_lba_2 <= msu_data_addr >> 9;	// Request the SECTOR that we need. (shift "msu_data_addr" by 9 (divide), to find which 512-byte sector the data is in).
 				sd_rd[2] <= 1'b1;
 				msu_data_busy <= 1'b1;		// TESTING!!
 				msu_data_wordcount <= 8'd0;
@@ -1033,15 +1076,12 @@ else begin
 	end
 end
 
-
 reg [15:0] msu_data_buff [0:255];
 (*noprune*) reg [1:0] msu_data_state = 2'd0;
 (*noprune*) reg [7:0] msu_data_wordcount = 2'd0;
-
 reg [22:0] msu_data_sector_old = 23'h000000;
 
 assign msu_data_in = (!msu_data_addr[0]) ? msu_data_buff[msu_data_addr[31:1]][7:0] : msu_data_buff[msu_data_addr[31:1]][15:8];
-
 
 // The MSU Audio FIFO should be getting cleared now when msu_audio_play==0.
 //
@@ -1056,7 +1096,6 @@ assign msu_audio_r = (msu_audio_play) ? samp_r : 16'h0000;
 
 //assign msu_audio_l = (msu_audio_play) ? msu_vol_mix_l[24:9] : 16'h0000;
 //assign msu_audio_r = (msu_audio_play) ? msu_vol_mix_r[24:9] : 16'h0000;
-
 
 /////////////////////////  STATE SAVE/LOAD  /////////////////////////////
 

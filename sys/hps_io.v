@@ -108,7 +108,7 @@ module hps_io #(parameter STRLEN=0, PS2DIV=0, WIDE=0, VDNUM=4, PS2WE=0)
 
 	// MSU support
 	input      [15:0] msu_trackout,
-	output reg        msu_trackmounting,
+	output reg        msu_trackmounting = 0,
 
 	// ps2 keyboard emulation
 	output            ps2_kbd_clk_out,
@@ -323,8 +323,6 @@ always@(posedge clk_sys) begin
 	end
 	
 // sd_cmd = {2'b00, sd_wr[3], sd_wr[2], sd_wr[1], sd_rd[3], sd_rd[2], sd_rd[1], 4'b0101, sd_conf, 1'b1, sd_wr[0], sd_rd[0]};	// Just for notes. ElectronAsh.
-//
-
 
 	if (status[0]) begin	// RESET bit, from the HPS.
 		slot_0_active <= 1'b0;
@@ -352,7 +350,7 @@ always@(posedge clk_sys) begin
 		sd_cmd[13] <= 0;
 	
 		// sd_rd / sd_wr Arbiter / Priority encoder.
-			  if (sd_rd[0] && !slot_1_active && !slot_2_active && !slot_3_active) begin sd_cmd[0]  <= 1; slot_0_active <= 1; end
+			 if (sd_rd[0] && !slot_1_active && !slot_2_active && !slot_3_active) begin sd_cmd[0]  <= 1; slot_0_active <= 1; end
 		else if (sd_wr[0] && !slot_1_active && !slot_2_active && !slot_3_active) begin sd_cmd[1]  <= 1; slot_0_active <= 1; end
 		else if (sd_rd[1] && !slot_0_active && !slot_2_active && !slot_3_active) begin sd_cmd[8]  <= 1; slot_1_active <= 1; end
 		else if (sd_wr[1] && !slot_0_active && !slot_2_active && !slot_3_active) begin sd_cmd[11] <= 1; slot_1_active <= 1; end
@@ -379,7 +377,6 @@ always@(posedge clk_sys) begin
 		if ( (sd_ack_d[2] && !sd_ack[2]) ) begin slot_2_active <= 0; end
 		if ( (sd_ack_d[3] && !sd_ack[3]) ) begin slot_3_active <= 0; end
 	end
-
 	
 	sd_buff_wr <= b_wr[0];
 	if(b_wr[2] && (~&sd_buff_addr)) sd_buff_addr <= sd_buff_addr + 1'b1;
