@@ -38,7 +38,7 @@ module msu_audio(
   // Assumed we are playing
   reg audio_play = 0;
   reg trig_play = 1;
-  reg trackmounting_falling = 1;
+  //reg trackmounting_falling = 1;
   // Assumed image size
   //reg [31:0] img_size = 32'd8879616;
   reg [31:0] img_size = 32'd1040;
@@ -64,7 +64,7 @@ module msu_audio(
   reg [8:0] end_frame_byte_offset;
   reg [8:0] end_frame_word_offset;
   reg [7:0] partial_frame_state;
-  reg trackmounting_1;
+  //reg trackmounting_1;
   reg [20:0] current_frame;
   reg [20:0] max_end_frame;
    
@@ -74,7 +74,7 @@ module msu_audio(
   state = 8'd0;
   // End frame handlingloop_index_in_words_full
   partial_frame_state = 8'd0;
-  trackmounting_1 = 0;
+  //trackmounting_1 = 0;
   current_frame = 21'd0;
   max_end_frame = 21'd2097151;  
   debug_here = 8'd0;
@@ -86,10 +86,10 @@ module msu_audio(
 
   wire [31:0]img_size_frames = img_size >> 9;
 
-  `ifndef debug
+  //`ifndef debug
   // Work out trackmounting_falling
-  wire trackmounting_falling = (trackmounting_1 && !trackmounting);
-  `endif
+  //wire trackmounting_falling = (trackmounting_1 && !trackmounting);
+  //`endif
 
   // Loop handling
   wire [31:0] loop_index_in_words_full = loop_index[31:0] << 1;
@@ -97,40 +97,39 @@ module msu_audio(
   
   always @(posedge clk) begin
     // We have a trigger to play...
-    if (reset || trig_play) begin
+    if (reset || trackmounting) begin // || trackmounting_falling) begin
       debug_here <= 8'd7;
       // Stop any existing audio playback
+      audio_play <= 0;
+
       current_frame <= 0;
       sd_lba_1 <= 0;
       state <= 0;
-      audio_play <= 0;
       word_count <= 0;
-      looping <= 0;
+    
       partial_frame_state <= 0;
       end_frame <= 0;
+      end_frame_byte_offset <= 0;
+      end_frame_word_offset <= 0;
+    
+      looping <= 0;
       `ifndef debug
       loop_index <= 0;
       `endif
-      
-      end_frame_byte_offset <= 0;
-      end_frame_word_offset <= 0;
-      // Work out the audio playback mode
-      if (!repeat_in) begin
-        // Audio is not repeating and will stop
-        // @todo force audio repeating for now
-        mode <= 8'd2;
-      end else begin
-        // Audio is repeating
-        mode <= 8'd2;
-      end
       `ifdef debug
       sd_ack_1 <= 1'b1;
       trig_play <= 0;
       `endif
     end else begin
       `ifndef debug
-      trackmounting_1 <= trackmounting;
-      if (sd_ack_1 && sd_lba_1==0 && word_count==2 && sd_buff_wr) loop_index[15:0]  <= sd_buff_dout;
+      //trackmounting_1 <= trackmounting;
+      if (sd_ack_1 && sd_lba_1==0 && word_count==2 && sd_buff_wr) begin
+        loop_index[15:0]  <= sd_buff_dout;
+        // End frame calculations
+        end_frame <= img_size_frames[20:0] - 1;
+        end_frame_byte_offset <= img_size[8:0];
+        end_frame_word_offset <= img_size[8:0] >> 1;
+      end
       if (sd_ack_1 && sd_lba_1==0 && word_count==3 && sd_buff_wr) loop_index[31:16] <= sd_buff_dout;
       if (sd_ack_1 && sd_lba_1==0 && word_count==4 && sd_buff_wr) begin
         // Now that we have the complete 8 byte header, we have a possible loop_index to handle
@@ -139,26 +138,34 @@ module msu_audio(
         loop_frame_word_offset <= loop_index_in_words_full[8:0] + 9'd2;
       end
       `endif
-      
       case (state)
         0: begin
-          // Audio track has finished mounting
-          if (trackmounting_falling) begin
+          if (trig_play) begin
+            // Work out the audio playback mode
+            if (!repeat_in) begin
+              //
+              mode <= 8'd1;
+            end else begin
+              // Audio is repeating
+              mode <= 8'd2;
+            end
             debug_here <= 8'd6;
-            // End frame calculations
-            end_frame <= img_size_frames[20:0] - 1;
-            end_frame_byte_offset <= img_size[8:0];
-            end_frame_word_offset <= img_size[8:0] >> 1;
+            current_frame <= 0;
+            sd_lba_1 <= 0;
+            state <= 0;
+            word_count <= 0;
+            partial_frame_state <= 0;
+            end_frame <= 0;
+            end_frame_byte_offset <= 0;
+            end_frame_word_offset <= 0;    
             looping <= 0;
-            audio_play <= 1'b1;
-            // Advance the SD card LBA and read in the next sector
-            current_frame <= 21'd0;
-            sd_lba_1 <= 21'd0;
+            loop_index <= 0;
             // Go! (request a sector from the HPS)
-            sd_rd_1 <= 1'b1;
+            audio_play <= 1;
+            sd_rd_1 <= 1;
             state <= state + 1;
             `ifdef debug
-            trackmounting_falling <= 0;
+            //trackmounting_falling <= 0;
             `endif
           end
         end

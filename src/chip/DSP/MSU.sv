@@ -15,23 +15,34 @@ module MSU(
     output reg [15:0] track_out,
     input             track_mounting,
     output reg        trig_play,
-    
-    output      [7:0] volume_out,
-     
-    output reg msu_status_audio_busy = 0,
-    output reg msu_status_audio_repeat = 0,
+
+    output reg [7:0] volume_out,
+
+    output reg msu_status_audio_busy,
+    output reg msu_status_audio_repeat,
     // This should contain if the msu_audio instance is currently playing
     input  reg msu_status_audio_playing_in,
     // This should output play/stop coming from game code poking MSU_CONTROL 
-    output reg msu_status_audio_playing_out = 0,
+    output reg msu_status_audio_playing_out,
     
     input  msu_status_track_missing,
     
     output reg [31:0] msu_data_addr = 0,
     input [7:0] msu_data_in,
     input msu_status_data_busy,
-    output reg msu_data_seek
+    output reg msu_data_seek,
+    output reg [7:0] dbg_msu_reg
 );
+
+initial begin
+    msu_status_audio_busy = 0;
+    msu_status_audio_repeat = 0;
+    msu_status_audio_playing_out = 0;
+    msu_data_addr = 0;
+    track_out = 0;
+    trig_play = 0;
+    dbg_msu_reg = 0;
+end
 
 assign volume_out = MSU_VOLUME;
 
@@ -66,11 +77,13 @@ reg  [7:0] MSU_CONTROL;                   // $2007
 reg [31:0] MSU_ADDR;
 
 assign addr_out = MSU_ADDR;
-assign msu_status_audio_busy = ~track_mounting;
+// @todo might need this
+//assign msu_status_audio_busy = track_mounting;
 
 // Make sure we are aware of which bank ADDR is currently in 
 (*keep*) wire IO_BANK_SEL = (ADDR[23:16]>=8'h00 && ADDR[23:16]<=8'h3F) || (ADDR[23:16]>=8'h80 && ADDR[23:16]<=8'hBF);
 
+// Rising and falling edge detection
 reg RD_N_1 = 1'b1;
 reg WR_N_1 = 1'b1;
 
@@ -89,12 +102,13 @@ always @(posedge CLK or negedge RST_N) begin
         msu_data_addr <= 32'h00000000;
         RD_N_1 <= 1'b1;
         WR_N_1 <= 1'b1;
+        dbg_msu_reg <= 8'd1;
     end else begin
-        // Reset our play trigger for pulsing
+        // Reset our play triggers for pulsing
         trig_play <= 1'b0;
-
         msu_data_seek <= 1'b0;
 
+        // Rising and falling edge detection
         RD_N_1 <= RD_N;
         WR_N_1 <= WR_N;
           
@@ -103,6 +117,7 @@ always @(posedge CLK or negedge RST_N) begin
         // 0x2001 = MSU DATA Port.
         if (ENABLE && IO_BANK_SEL && ADDR[15:0]==16'h2001 && (!RD_N_1 && RD_N) ) begin
             msu_data_addr <= msu_data_addr + 1;
+            dbg_msu_reg <= 8'd2;
         end
 
         // FALLING edge of WR_N.
@@ -112,13 +127,24 @@ always @(posedge CLK or negedge RST_N) begin
             msu_data_addr <= {DIN, MSU_SEEK[23:0]};
             // And a SINGLE clock pulse of msu_data_seek
             msu_data_seek <= 1'b1;
+            dbg_msu_reg <= 8'd3;
         end
         
+        // // FALLING edge of WR_N.
+        // // 0x2005 = MSU TRACK MSB.
+        // if (ENABLE && IO_BANK_SEL && ADDR[15:0]==16'h2005 && (WR_N_1 && !WR_N)) begin
+        //     // Pulse trig_play for only ONE clock cycle.
+        //     trig_play <= 1;
+        // end
         // FALLING edge of WR_N.
-        // 0x2005 = MSU TRACK MSB.
-        if (ENABLE && IO_BANK_SEL && ADDR[15:0]==16'h2005 && (WR_N_1 && !WR_N) ) begin
-            // Pulse trig_play for only ONE clock cycle.
-            trig_play <= 1;
+        // 0x2007 = MSU CONTROL
+        if (ENABLE && IO_BANK_SEL && ADDR[15:0] == 16'h2007 && (WR_N_1 && !WR_N)) begin
+            //dbg_msu_reg <= 8'd4;
+            //if (msu_status_audio_playing_out != 1) begin
+                dbg_msu_reg <= 8'd5;
+                // Pulse trig_play for only ONE clock cycle.
+                trig_play <= 1;
+            //end
         end
               
         // Register writes
@@ -144,27 +170,36 @@ always @(posedge CLK or negedge RST_N) begin
                     // And a pulse of msu_data_seek.
                     //msu_data_seek <= 1'b1;
                 end
-                // MSU_Track LSB
+                    // MSU_Track LSB
                 16'h2004: begin
-                  MSU_TRACK[7:0] <= DIN;
+                    MSU_TRACK[7:0] <= DIN;
                 end
                 // MSU_Track MSB
                 16'h2005: begin    
-                  MSU_TRACK[15:8] <= DIN;
-                  // Only update track_out when both (upper and lower) bytes arrive
-                  track_out <= {DIN, MSU_TRACK[7:0]};
+                    MSU_TRACK[15:8] <= DIN;
+                    // Only update track_out when both (upper and lower) bytes arrive
+                    track_out <= {DIN, MSU_TRACK[7:0]};
                 end
                 // MSU Audio Volume. (MSU_VOLUME).
                 16'h2006: begin
+                    dbg_msu_reg <= 8'd7;
                     MSU_VOLUME <= DIN;
                 end
                 // MSU Audio state control. (MSU_CONTROL).
                 16'h2007: begin
+                    dbg_msu_reg <= 8'd8;
                     // Writing to Audio State will do nothing if audio is already playing
-                    if (msu_status_audio_playing_in != 1) begin
+                    //if (msu_status_audio_playing_in != 1) begin
+                        dbg_msu_reg <= 8'd9;
+
                         msu_status_audio_playing_out <= DIN[0];
                         msu_status_audio_repeat <= DIN[1];
-                    end
+                        if (DIN[1] == 1) begin
+                            dbg_msu_reg <= 8'd10;
+                            // Pulse trig_play for only ONE clock cycle.
+                            trig_play <= 1;
+                        end
+                    //end
                 end
                 default:;
             endcase 
@@ -173,7 +208,8 @@ always @(posedge CLK or negedge RST_N) begin
             case (ADDR[15:0])
                  // MSU_STATUS
                  16'h2000: begin
-                      DOUT <= MSU_STATUS;
+                    dbg_msu_reg <= 8'd11;
+                    DOUT <= MSU_STATUS;
                  end
                  // MSU_READ
                  16'h2001: begin
@@ -187,22 +223,22 @@ always @(posedge CLK or negedge RST_N) begin
                  end
                  // MSU_ID
                  16'h2002: begin
-                      DOUT <= MSU_ID[0];
+                    DOUT <= MSU_ID[0];
                  end
                  16'h2003: begin
-                      DOUT <= MSU_ID[1];
+                    DOUT <= MSU_ID[1];
                  end
                  16'h2004: begin
-                      DOUT <= MSU_ID[2];
+                    DOUT <= MSU_ID[2];
                  end
                  16'h2005: begin
                       DOUT <= MSU_ID[3];
                  end
                  16'h2006: begin
-                      DOUT <= MSU_ID[4];
+                    DOUT <= MSU_ID[4];
                  end
                  16'h2007: begin
-                      DOUT <= MSU_ID[5];
+                    DOUT <= MSU_ID[5];
                  end
                  default:;
             endcase
