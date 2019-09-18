@@ -535,8 +535,6 @@ main main
 
 wire signed [16:0] AUDIO_MIX_L = $signed({MAIN_AUDIO_L[15], MAIN_AUDIO_L}) + $signed({msu_audio_l[15], msu_audio_l});
 wire signed [16:0] AUDIO_MIX_R = $signed({MAIN_AUDIO_R[15], MAIN_AUDIO_R}) + $signed({msu_audio_r[15], msu_audio_r});
-//wire signed [16:0] AUDIO_MIX_L = $signed(MAIN_AUDIO_L) + {1'b0,msu_audio_l};
-//wire signed [16:0] AUDIO_MIX_R = $signed(MAIN_AUDIO_R) + {1'b0,msu_audio_r};
 
 assign AUDIO_L = AUDIO_MIX_L[16:1];
 assign AUDIO_R = AUDIO_MIX_R[16:1];
@@ -915,7 +913,9 @@ assign msu_audio_l = (msu_audio_play) ? msu_vol_mix_l[23:8] : 16'h0000;
 assign msu_audio_r = (msu_audio_play) ? msu_vol_mix_r[23:8] : 16'h0000;
 
 // MSU datafile state machine
+// Commented out for now
 always @(posedge clk_sys or posedge reset) begin
+/*
 	if (reset) begin
 		msu_data_busy <= 1'b0;	// Should maybe have this set HIGH after reset, but TESTING for now! ElectronAsh.
 		msu_data_sector_old <= 23'h000000;
@@ -923,7 +923,8 @@ always @(posedge clk_sys or posedge reset) begin
 	else begin
 		case (msu_data_state)
 		0: begin
-			if (/*msu_data_seek &&*/ ( msu_data_addr>>9 != msu_data_sector_old) ) begin	// Check to see if we've already read this sector
+			if (//msu_data_seek &&
+				 ( msu_data_addr>>9 != msu_data_sector_old) ) begin	// Check to see if we've already read this sector
 				//msu_audio_play <= 1'b0;	// STOP audio playback when data is requested?
 				msu_data_sector_old <= msu_data_addr>>9;
 				sd_lba_2 <= msu_data_addr >> 9;	// Request the SECTOR that we need. (shift "msu_data_addr" by 9 (divide), to find which 512-byte sector the data is in).
@@ -954,6 +955,7 @@ always @(posedge clk_sys or posedge reset) begin
 		default:;
 		endcase
 	end
+*/
 end
 
 reg [15:0] msu_data_buff [0:255];

@@ -10,12 +10,13 @@ module MSU(
     input      [7:0] DIN,
     output reg [7:0] DOUT,
 
-    // Stuff for the HPS
+    // Audio HPS control
     output     [31:0] addr_out,
     output reg [15:0] track_out,
     input             track_mounting,
-    output reg        trig_play,
 
+    // Audio player control
+    output reg        trig_play,
     output reg [7:0] volume_out,
 
     output reg msu_status_audio_busy,
@@ -77,7 +78,7 @@ reg  [7:0] MSU_CONTROL;                   // $2007
 reg [31:0] MSU_ADDR;
 
 assign addr_out = MSU_ADDR;
-// @todo might need this
+// @todo might need this - Track seek time is given a busy bit in the official implementation
 //assign msu_status_audio_busy = track_mounting;
 
 // Make sure we are aware of which bank ADDR is currently in 
@@ -117,7 +118,6 @@ always @(posedge CLK or negedge RST_N) begin
         // 0x2001 = MSU DATA Port.
         if (ENABLE && IO_BANK_SEL && ADDR[15:0]==16'h2001 && (!RD_N_1 && RD_N) ) begin
             msu_data_addr <= msu_data_addr + 1;
-            dbg_msu_reg <= 8'd2;
         end
 
         // FALLING edge of WR_N.
@@ -127,24 +127,12 @@ always @(posedge CLK or negedge RST_N) begin
             msu_data_addr <= {DIN, MSU_SEEK[23:0]};
             // And a SINGLE clock pulse of msu_data_seek
             msu_data_seek <= 1'b1;
-            dbg_msu_reg <= 8'd3;
         end
         
-        // // FALLING edge of WR_N.
-        // // 0x2005 = MSU TRACK MSB.
-        // if (ENABLE && IO_BANK_SEL && ADDR[15:0]==16'h2005 && (WR_N_1 && !WR_N)) begin
-        //     // Pulse trig_play for only ONE clock cycle.
-        //     trig_play <= 1;
-        // end
         // FALLING edge of WR_N.
         // 0x2007 = MSU CONTROL
         if (ENABLE && IO_BANK_SEL && ADDR[15:0] == 16'h2007 && (WR_N_1 && !WR_N)) begin
-            //dbg_msu_reg <= 8'd4;
-            //if (msu_status_audio_playing_out != 1) begin
-                dbg_msu_reg <= 8'd5;
-                // Pulse trig_play for only ONE clock cycle.
-                trig_play <= 1;
-            //end
+            trig_play <= 1;
         end
               
         // Register writes
@@ -182,24 +170,17 @@ always @(posedge CLK or negedge RST_N) begin
                 end
                 // MSU Audio Volume. (MSU_VOLUME).
                 16'h2006: begin
-                    dbg_msu_reg <= 8'd7;
                     MSU_VOLUME <= DIN;
                 end
                 // MSU Audio state control. (MSU_CONTROL).
                 16'h2007: begin
-                    dbg_msu_reg <= 8'd8;
                     // Writing to Audio State will do nothing if audio is already playing
-                    //if (msu_status_audio_playing_in != 1) begin
-                        dbg_msu_reg <= 8'd9;
-
-                        msu_status_audio_playing_out <= DIN[0];
-                        msu_status_audio_repeat <= DIN[1];
-                        if (DIN[1] == 1) begin
-                            dbg_msu_reg <= 8'd10;
-                            // Pulse trig_play for only ONE clock cycle.
-                            trig_play <= 1;
-                        end
-                    //end
+                    msu_status_audio_playing_out <= DIN[0];
+                    msu_status_audio_repeat <= DIN[1];
+                    if (DIN[1] == 1) begin
+                        // Pulse trig_play for only ONE clock cycle.
+                        trig_play <= 1;
+                    end
                 end
                 default:;
             endcase 
@@ -207,12 +188,11 @@ always @(posedge CLK or negedge RST_N) begin
         // Register reads
             case (ADDR[15:0])
                  // MSU_STATUS
-                 16'h2000: begin
-                    dbg_msu_reg <= 8'd11;
+                16'h2000: begin
                     DOUT <= MSU_STATUS;
-                 end
-                 // MSU_READ
-                 16'h2001: begin
+                end
+                // MSU_READ data
+                16'h2001: begin
                     // if (!msu_status_data_busy) begin
                     //     // Data reads increase the memory address by 1
                     //     msu_data_addr <= msu_data_addr + 1;
@@ -220,27 +200,27 @@ always @(posedge CLK or negedge RST_N) begin
                     
                     //DOUT <= MSU_READ;
                     DOUT <= msu_data_in;
-                 end
+                end
                  // MSU_ID
-                 16'h2002: begin
+                16'h2002: begin
                     DOUT <= MSU_ID[0];
-                 end
-                 16'h2003: begin
+                end
+                16'h2003: begin
                     DOUT <= MSU_ID[1];
-                 end
-                 16'h2004: begin
+                end
+                16'h2004: begin
                     DOUT <= MSU_ID[2];
-                 end
-                 16'h2005: begin
-                      DOUT <= MSU_ID[3];
-                 end
-                 16'h2006: begin
+                end
+                16'h2005: begin
+                    DOUT <= MSU_ID[3];
+                end
+                16'h2006: begin
                     DOUT <= MSU_ID[4];
-                 end
-                 16'h2007: begin
+                end
+                16'h2007: begin
                     DOUT <= MSU_ID[5];
-                 end
-                 default:;
+                end
+                default:;
             endcase
         end
     end
