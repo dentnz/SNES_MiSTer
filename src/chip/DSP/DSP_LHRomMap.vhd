@@ -51,12 +51,14 @@ entity DSP_LHRomMap is
 
 		MSU_TRACKOUT          : out std_logic_vector(15 downto 0);
 		MSU_TRACKMOUNTING     : in  std_logic;
+		MSU_TRACKFINISHED     : in  std_logic;
 		MSU_TRIG_PLAY         : out std_logic;
+		MSU_TRIG_PAUSE        : out std_logic;
 		MSU_VOLUME_OUT		  : out std_logic_vector(7 downto 0);
 		MSU_REPEAT_OUT		  : out std_logic;
 		MSU_AUDIO_PLAYING_IN  : in  std_logic;
 		MSU_AUDIO_PLAYING_OUT : out std_logic;
-		MSU_TRACK_MISSING     : in  std_logic;
+		MSU_TRACKMISSING      : in  std_logic;
 		MSU_DATA_ADDR		  : out std_logic_vector(31 downto 0);
 		MSU_DATA_IN           : in  std_logic_vector(7 downto 0);
 		MSU_DATA_BUSY		  : in  std_logic;
@@ -112,7 +114,9 @@ architecture rtl of DSP_LHRomMap is
 
 			track_out       : out std_logic_vector(15 downto 0);
 			track_mounting  : in  std_logic;
+			track_finished  : in  std_logic;
 			trig_play       : out std_logic;
+			trig_pause		: out std_logic;
 			
 			volume_out		 : out std_logic_vector(7 downto 0);
 			
@@ -121,7 +125,7 @@ architecture rtl of DSP_LHRomMap is
 			msu_status_audio_playing_in : in  std_logic;
 			msu_status_audio_playing_out: out std_logic;
 			
-			msu_status_track_missing 	: in std_logic;
+			msu_status_track_missing_in : in std_logic;
 			
 			msu_data_addr			: out std_logic_vector(31 downto 0);
 			msu_data_in				: in std_logic_vector(7 downto 0);
@@ -292,14 +296,16 @@ begin
 
 		track_out     => MSU_TRACKOUT,
 		track_mounting=> MSU_TRACKMOUNTING,
+		track_finished=> MSU_TRACKFINISHED,
 		trig_play     => MSU_TRIG_PLAY,
+		trig_pause    => MSU_TRIG_PAUSE,
 		
 		volume_out => MSU_VOLUME_OUT,
 		
 		msu_status_audio_repeat => MSU_REPEAT_OUT,		       
 		msu_status_audio_playing_in => MSU_AUDIO_PLAYING_IN,
 		msu_status_audio_playing_out => MSU_AUDIO_PLAYING_OUT,
-		msu_status_track_missing => MSU_TRACK_MISSING, -- INPUT
+		msu_status_track_missing_in => MSU_TRACKMISSING,
 		
 		msu_data_addr => MSU_DATA_ADDR,
 		msu_data_in => MSU_DATA_IN,

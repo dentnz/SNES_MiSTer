@@ -287,6 +287,9 @@ wire  [7:0] joy0_x,joy0_y,joy1_x,joy1_y;
 
 reg  [15:0] msu_trackout = 0;
 reg   		msu_trackmounting = 0;
+reg         msu_trackmissing = 0;
+reg			msu_trackmissing_reset = 0;
+reg			msu_trackfinished = 0;
 
 hps_io #(.STRLEN($size(CONF_STR)>>3), .WIDE(1)) hps_io
 (
@@ -309,6 +312,8 @@ hps_io #(.STRLEN($size(CONF_STR)>>3), .WIDE(1)) hps_io
 
 	.msu_trackout(msu_trackout),
 	.msu_trackmounting(msu_trackmounting),
+	.msu_trackmissing(msu_trackmissing),
+	.msu_trackfinished(msu_trackfinished),
 
 	.status(status),
 	.status_menumask(status_menumask),
@@ -426,13 +431,13 @@ wire turbo_allow;
 
 reg [15:0] MAIN_AUDIO_L;
 reg [15:0] MAIN_AUDIO_R;
-reg msu_trig_play;
+reg msu_trig_play = 0;
+reg msu_trig_pause = 0;
 
 wire [7:0] msu_volume_out;
 wire msu_repeat_out;
 wire msu_audio_playing = msu_audio_play;
 wire msu_audio_playing_out;
-wire msu_track_missing = 1'b0;
 wire [31:0] msu_data_addr;
 wire [7:0] msu_data_in;
 reg msu_data_busy = 1'b0;
@@ -451,13 +456,14 @@ main main
 	.MSU_TRACKOUT(msu_trackout),
 	.MSU_TRACKMOUNTING(msu_trackmounting),
 	.MSU_TRIG_PLAY(msu_trig_play),
+	.MSU_TRIG_PAUSE(msu_trig_pause),
 	
 	.MSU_VOLUME_OUT(msu_volume_out),
 	.MSU_REPEAT_OUT(msu_repeat_out),
 	.MSU_AUDIO_PLAYING_IN(msu_audio_playing),
 	.MSU_AUDIO_PLAYING_OUT(msu_audio_playing_out),
-	
-	.MSU_TRACK_MISSING(msu_track_missing),
+	.MSU_TRACKMISSING(msu_trackmissing),
+	.MSU_TRACKFINISHED(msu_trackfinished),
 	
 	.MSU_DATA_ADDR(msu_data_addr),
 	.MSU_DATA_IN(msu_data_in),
@@ -828,6 +834,16 @@ lightgun lightgun
 );
 
 ///////////////////////////  MSU Audio  ///////////////////////////////
+// Please use SD2SNES compatible MSU1 hacks *only*
+//
+// Things still need to do:
+// - trig_stop (track 0 select)
+// - Same track selection
+//
+// Many thanks to ElectronAsh and Qwertymodo for helping me get my head around this
+// Extra respect to Qwertymodo for creating msu1.sfc!
+// Thanks to Uigiflip, BrunoSilva for testing
+
 // State of playing in the msu_audio instance
 (*noprune*) reg msu_audio_play = 0;
 
@@ -865,7 +881,7 @@ end
 wire msu_header_skip = sd_lba_1==0 && (msu_audio_word_count >= 0 && msu_audio_word_count <= 3);
 
 (*keep*) wire audio_clk_en = (audio_clk_div==1);
-(*keep*) wire audio_fifo_reset = RESET | msu_trig_play;
+(*keep*) wire audio_fifo_reset = RESET | msu_trackmounting | msu_trackmissing_reset | cart_download;
 (*keep*) wire audio_fifo_full;
 (*keep*) wire audio_fifo_wr = !audio_fifo_full && sd_ack[1] && sd_buff_wr && !msu_header_skip && !ignore_sd_buffer_out;
 (*keep*) wire [11:0] audio_fifo_usedw;
@@ -899,17 +915,22 @@ msu_audio msu_audio_inst (
   	.reset(reset),
   	.img_size(img_size),
   	.trig_play(msu_trig_play),
+	.trig_pause(msu_trig_pause),
 	.sd_ack_1(sd_ack[1]),
   	.repeat_in(msu_repeat_out),
   	.trackmounting(msu_trackmounting),
+	.trackmissing(msu_trackmissing),
+	.trackfinished(msu_trackfinished),
   	.sd_buff_wr(sd_buff_wr),
 	.sd_buff_dout(sd_buff_dout),
   	.audio_fifo_usedw(audio_fifo_usedw),  
   	.sd_lba_1(sd_lba_1),
 	.ignore_sd_buffer_out(ignore_sd_buffer_out),
   	.audio_play(msu_audio_play),
+	.audio_play_in(msu_audio_playing_out),
 	.word_count(msu_audio_word_count),
-  	.sd_rd_1(sd_rd[1])
+  	.sd_rd_1(sd_rd[1]),
+	.trackmissing_reset(msu_trackmissing_reset)
 );
 
 wire signed [8:0] msu_vol_signed = {1'b0, msu_volume_out};

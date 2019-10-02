@@ -112,6 +112,8 @@ module hps_io #(parameter STRLEN=0, PS2DIV=0, WIDE=0, VDNUM=4, PS2WE=0)
 	// MSU support
 	input      [15:0] msu_trackout,
 	output reg        msu_trackmounting = 0,
+	output reg        msu_trackmissing = 0,
+	output reg 		  msu_trackfinished = 0,
 
 	// ps2 keyboard emulation
 	output            ps2_kbd_clk_out,
@@ -403,6 +405,9 @@ always@(posedge clk_sys) begin
 		sd_ack_conf <= 0;
 		io_dout <= 0;
 		ps2skip <= 0;
+		// Reset MSU stuff too
+		msu_trackfinished <= 0;
+		msu_trackmissing <= 0;
 	end else begin
 		if(io_strobe) begin
 
@@ -574,11 +579,29 @@ always@(posedge clk_sys) begin
 					'h2E: if(byte_cnt == 1) io_dout <= status_menumask;
 
 					//MSU support
-					'h50: begin
-						io_dout <= msu_trackout;        // To main_mister: Selected track, zero if stopped
+					'h4e: begin
+						// From main_mister: Track has reached end of the file
+						msu_trackfinished <= 1;
 					end
-					'h51: msu_trackmounting <= 0;       // From main_mister: Selected track mounted state
-					'h52: msu_trackmounting <= 1;       // From main_mister: Selected track mounting state
+					'h4f: begin
+						// From main_mister: Selected track is missing - this is a pulse
+						msu_trackmissing <= 1; 
+						msu_trackmounting <= 0;
+					end
+					'h50: begin
+						// To main_mister: Selected track, zero if stopped
+						io_dout <= msu_trackout;        
+					end
+					'h51: begin
+						// From main_mister: Selected track mounted state
+						msu_trackmounting <= 0;
+						msu_trackmissing <= 0;
+					end         
+					'h52: begin
+						// From main_mister: Selected track mounting state
+						msu_trackmounting <= 1;
+						msu_trackmissing <= 0;
+					end       
 					
 					//sdram size set
 					'h31: if(byte_cnt == 1) sdram_sz <= io_din;
