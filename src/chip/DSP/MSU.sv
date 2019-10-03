@@ -49,6 +49,11 @@ initial begin
     trig_play = 0;
     trig_pause = 0;
     dbg_msu_reg = 0;
+    track_mounting_falling = 0;
+    track_mounting_old = 0;
+    track_mounting_falling_old = 0;
+    track_mounting_falling_rising = 0;
+    track_change_audio_busy = 0;
 end
 
 assign volume_out = MSU_VOLUME;
@@ -104,7 +109,13 @@ assign addr_out = MSU_ADDR;
 reg RD_N_1 = 1'b1;
 reg WR_N_1 = 1'b1;
 reg msu_status_track_missing_in_1 = 1'b1;
-reg track_mounting_1 = 1'b1;
+
+// track mounting with respect to audio busy
+reg track_mounting_falling = 0;
+reg track_mounting_old = 0;
+reg track_mounting_falling_old = 0;
+reg track_mounting_falling_rising = 0;
+reg track_change_audio_busy = 0;
 
 always @(posedge CLK or negedge RST_N) begin
     if (~RST_N) begin
@@ -118,8 +129,6 @@ always @(posedge CLK or negedge RST_N) begin
         msu_status_audio_repeat <= 0;
         msu_status_track_missing <= 0;
         msu_status_track_missing_in_1 <= 1;
-        track_mounting_1 <= 1;
-        msu_status_audio_busy <= 0;
         RD_N_1 = 1;
         WR_N_1 = 1;
         DOUT <= 0;
@@ -127,6 +136,10 @@ always @(posedge CLK or negedge RST_N) begin
         trig_pause <= 0;
         msu_data_seek <= 0;
         msu_data_addr <= 32'h00000000;
+
+        track_mounting_old <= 0;
+        track_mounting_falling_old <= 0;
+        track_change_audio_busy <= 0;
     end else begin
         // Reset our play triggers for pulsing
         trig_play <= 0;
@@ -137,7 +150,7 @@ always @(posedge CLK or negedge RST_N) begin
         RD_N_1 <= RD_N;
         WR_N_1 <= WR_N;
         msu_status_track_missing_in_1 <= msu_status_track_missing_in;
-        track_mounting_1 <= track_mounting;
+        track_mounting_old <= track_mounting;
 
         // Status reads... this could go back in our read block below
         // if (ENABLE && IO_BANK_SEL && ADDR[15:0]==16'h2000 && (!RD_N_1 && RD_N) ) begin
@@ -146,10 +159,10 @@ always @(posedge CLK or negedge RST_N) begin
         // end
 
         // Falling edge of track mounting
-        if (ENABLE && IO_BANK_SEL && (track_mounting_1 && !track_mounting)) begin
+        if (track_mounting_falling) begin
             dbg_msu_reg <= 8'd7;
             msu_status_track_missing <= msu_status_track_missing_in;
-            msu_status_audio_busy <= 0;
+            track_change_audio_busy <= 0;
         end
 
         // RISING edge of RD_N, when it goes to idle
@@ -171,25 +184,26 @@ always @(posedge CLK or negedge RST_N) begin
         // FALLING edge of WR_N.
         // 0x2007 = MSU CONTROL
         // @todo is this needed any more?
-        if (ENABLE && IO_BANK_SEL && ADDR[15:0] == 16'h2007 && (WR_N_1 && !WR_N)) begin
-            dbg_msu_reg <= 8'd13;
-            if (!msu_status_audio_busy) begin
-                msu_status_audio_repeat <= DIN[1];
-                // We can only play/pause a track that has been set
-                if (MSU_TRACK != 16'h0000 && !msu_status_track_missing) begin
-                    msu_status_audio_playing_out <= DIN[0];
-                    if (DIN[0] == 1) begin
-                        // Pulse trig_play for only ONE clock cycle
-                        trig_play <= 1;
-                        dbg_msu_reg <= 8'd2;    
-                    end else if (DIN[0] == 0) begin
-                        // Pulse trig_pause for only ONE clock cycle
-                        trig_pause <= 1;
-                        dbg_msu_reg <= 8'd3;
-                    end
-                end
-            end
-        end
+        // ********************************************* TRY TO REMOVE THIS AGAIN!!!
+        // if (ENABLE && IO_BANK_SEL && ADDR[15:0] == 16'h2007 && (WR_N_1 && !WR_N)) begin
+        //     dbg_msu_reg <= 8'd13;
+        //     if (!msu_status_audio_busy) begin
+        //         msu_status_audio_repeat <= DIN[1];
+        //         // We can only play/pause a track that has been set
+        //         if (MSU_TRACK != 16'h0000 && !msu_status_track_missing) begin
+        //             msu_status_audio_playing_out <= DIN[0];
+        //             if (DIN[0] == 1) begin
+        //                 // Pulse trig_play for only ONE clock cycle
+        //                 trig_play <= 1;
+        //                 dbg_msu_reg <= 8'd2;    
+        //             end else if (DIN[0] == 0) begin
+        //                 // Pulse trig_pause for only ONE clock cycle
+        //                 trig_pause <= 1;
+        //                 dbg_msu_reg <= 8'd3;
+        //             end
+        //         end
+        //     end
+        // end
 
         // @todo this might not be needed here
         // if (track_finished) begin
@@ -202,7 +216,7 @@ always @(posedge CLK or negedge RST_N) begin
         if (!msu_status_track_missing_in_1 && msu_status_track_missing_in) begin
             // Status bit set (see $2005 for where it gets unset)
             msu_status_track_missing <= 1;
-            msu_status_audio_busy <= 0;
+            track_change_audio_busy <= 0;
             dbg_msu_reg <= 8'd9;
         end
               
@@ -241,7 +255,7 @@ always @(posedge CLK or negedge RST_N) begin
                     track_out <= {DIN, MSU_TRACK[7:0]};
                     msu_status_track_missing <= 0;
                     // Busy bit goes high immediately after track is set
-                    msu_status_audio_busy <= 1;
+                    track_change_audio_busy <= 1;
                 end
                 // MSU Audio Volume. (MSU_VOLUME).
                 16'h2006: begin
@@ -311,5 +325,10 @@ always @(posedge CLK or negedge RST_N) begin
         end
     end
 end
+
+assign track_mounting_falling = !track_mounting & track_mounting_old;
+assign track_mounting_falling_rising = track_mounting_falling & !track_mounting_falling_old;
+// Audio busy should happen immediately on track selection, and stop immediately after track is mounted
+assign msu_status_audio_busy = (track_change_audio_busy || track_mounting) && !track_mounting_falling_rising;  
 
 endmodule
