@@ -287,6 +287,7 @@ wire  [7:0] joy0_x,joy0_y,joy1_x,joy1_y;
 
 reg  [15:0] msu_trackout = 0;
 reg   		msu_trackmounting = 0;
+wire [64:0] RTC;
 
 hps_io #(.STRLEN($size(CONF_STR)>>3), .WIDE(1)) hps_io
 (
@@ -336,7 +337,9 @@ hps_io #(.STRLEN($size(CONF_STR)>>3), .WIDE(1)) hps_io
 
 	.img_mounted(img_mounted),
 	.img_readonly(img_readonly),
-	.img_size(img_size)
+	.img_size(img_size),
+	
+	.RTC(RTC)
 );
 
 wire       GUN_BTN = status[27];
@@ -526,6 +529,8 @@ main main
 	.JOY1_P6(JOY1_P6),
 	.JOY2_P6(JOY2_P6),
 	.JOY2_P6_in(JOY2_P6_DI),
+	
+	.EXT_RTC(RTC),
 
 	.GG_EN(status[24]),
 	.GG_CODE(gg_code),
