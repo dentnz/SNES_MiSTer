@@ -58,6 +58,7 @@ module main
    input             GSU_TURBO,
 
    output     [15:0] MSU_TRACKOUT,
+   output            MSU_TRACKREQUEST,
    input             MSU_TRACKMOUNTING,
    output            MSU_TRIG_PLAY,
    output            MSU_TRIG_PAUSE,
@@ -265,6 +266,7 @@ DSP_LHRomMap DSP_LHRomMap
 	.bsram_mask(RAM_MASK),
 
 	.msu_trackout(MSU_TRACKOUT),
+	.msu_trackrequest(MSU_TRACKREQUEST),
 	.msu_trackmounting(MSU_TRACKMOUNTING),
 	.msu_trackmissing(MSU_TRACKMISSING),
 	.msu_trackfinished(MSU_TRACKFINISHED),

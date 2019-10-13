@@ -286,6 +286,7 @@ wire [24:0] ps2_mouse;
 wire  [7:0] joy0_x,joy0_y,joy1_x,joy1_y;
 
 reg  [15:0] msu_trackout = 0;
+reg         msu_trackrequest = 0;
 reg   		msu_trackmounting = 0;
 reg         msu_trackmissing = 0;
 reg			msu_trackmissing_reset = 0;
@@ -311,6 +312,7 @@ hps_io #(.STRLEN($size(CONF_STR)>>3), .WIDE(1)) hps_io
 	.ps2_mouse(ps2_mouse),
 
 	.msu_trackout(msu_trackout),
+	.msu_trackrequest_in(msu_trackrequest),
 	.msu_trackmounting(msu_trackmounting),
 	.msu_trackmissing(msu_trackmissing),
 	.msu_trackfinished(msu_trackfinished),
@@ -454,6 +456,7 @@ main main
 	.GSU_TURBO(GSU_TURBO),
 
 	.MSU_TRACKOUT(msu_trackout),
+	.MSU_TRACKREQUEST(msu_trackrequest),
 	.MSU_TRACKMOUNTING(msu_trackmounting),
 	.MSU_TRIG_PLAY(msu_trig_play),
 	.MSU_TRIG_PAUSE(msu_trig_pause),

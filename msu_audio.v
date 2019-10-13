@@ -33,7 +33,6 @@ module msu_audio(
   reg [20:0] loop_frame;
   reg [8:0] loop_frame_word_offset;
   reg looping;
-  reg [7:0] mode;
   reg [7:0] state;
   
   // End frame handling
@@ -42,28 +41,24 @@ module msu_audio(
   reg [8:0] end_frame_word_offset;
   reg [7:0] partial_frame_state;
   reg [20:0] current_frame;
-  reg [20:0] max_end_frame;
    
   initial begin
   looping = 0;
-  mode = 8'd0;
   state = 8'd0;
-  // End frame handling
   partial_frame_state = 8'd0;
   current_frame = 21'd0;
-  max_end_frame = 21'd2097151;  
   debug_here = 8'd0;
   end_frame = 0;
   loop_index = 32'd0;
   trackmissing_reset = 0;
   end
 
-  localparam WAITING_FOR_PLAY_STATE = 0;
-  localparam WAITING_SD_STATE = 1;
-  localparam PLAYING_STATE = 2;
-  localparam PLAYING_CHECKS_STATE = 3;
-  localparam FINAL_FRAME_STATE = 4;
-  localparam PAUSED_STATE = 5;
+  localparam WAITING_FOR_PLAY_STATE = 8'd0;
+  localparam WAITING_SD_STATE = 8'd1;
+  localparam PLAYING_STATE = 8'd2;
+  localparam PLAYING_CHECKS_STATE = 8'd3;
+  localparam FINAL_FRAME_STATE = 8'd4;
+  localparam PAUSED_STATE = 8'd5;
 
   wire [31:0]img_size_frames = img_size >> 9;
 
@@ -75,8 +70,28 @@ module msu_audio(
   // Falling edge detection for track missing
   reg trackmissing_1 = 1'b1;
 
+  // always @(*) begin
+  //   if (reset || trackmounting) begin
+  //     loop_index = 0;
+      
+  //     loop_frame = 0;
+  //     loop_frame_word_offset = 0;
+  //   end else begin
+  //     // if (sd_ack_1 && sd_lba_1==0 && word_count==2 && sd_buff_wr) begin
+  //     //   loop_index[15:0] = sd_buff_dout;
+  //     // end
+  //     // if (sd_ack_1 && sd_lba_1==0 && word_count==3 && sd_buff_wr) loop_index[31:16] = sd_buff_dout;
+
+  //     // if (sd_ack_1 && sd_lba_1==0 && word_count==4 && sd_buff_wr) begin
+  //     //   // Now that we have the complete 8 byte header, we have a possible loop_index to handle
+  //     //   loop_frame = loop_index_in_frames_full[20:0];
+  //     //   // Take the last 9 bits (512 byte sectors)
+  //     //   loop_frame_word_offset = loop_index_in_words_full[8:0] + 9'd2;
+  //     // end
+  //   end
+  // end  
+ 
   always @(posedge clk) begin
-    // @todo trackfinished
     if (reset || trackmounting || trackmissing_reset) begin
       // Stop any existing audio playback
       audio_play <= 0;
@@ -93,6 +108,10 @@ module msu_audio(
     
       looping <= 0;
       loop_index <= 0;
+      loop_frame <= 0;
+      loop_frame_word_offset = 0;
+      
+      ignore_sd_buffer_out <= 0;
 
       trackmissing_reset <= 0;
 
@@ -125,20 +144,14 @@ module msu_audio(
       if (sd_ack_1 && sd_lba_1==0 && word_count==4 && sd_buff_wr) begin
         // Now that we have the complete 8 byte header, we have a possible loop_index to handle
         loop_frame <= loop_index_in_frames_full[20:0];
-        // Take the last 9 bits (512 byte sectors)
-        loop_frame_word_offset <= loop_index_in_words_full[8:0] + 9'd2;
+        // Take the last 9 bits (512 byte sectors, 256 words)
+        //loop_frame_word_offset <= loop_index_in_words_full[8:0] + 9'd2;
+        loop_frame_word_offset <= loop_index_in_words_full[7:0] + 9'd2;
       end
       case (state)
         WAITING_FOR_PLAY_STATE: begin
           if (trig_play) begin
-            // Work out the audio playback mode
-            if (!repeat_in) begin
-              // Audio is non repeating
-              mode <= 8'd1;
-            end else begin
-              // Audio is repeating
-              mode <= 8'd2;
-            end
+            debug_here <= 8'd0;
             current_frame <= 0;
             sd_lba_1 <= 0;
             state <= 0;
@@ -148,6 +161,8 @@ module msu_audio(
             end_frame_byte_offset <= 0;
             end_frame_word_offset <= 0;    
             looping <= 0;
+            loop_frame <= 0;
+            loop_frame_word_offset <= 0;
             loop_index <= 0;
             just_reset <= 0;
             // Go! (request a sector from the HPS)
@@ -158,6 +173,7 @@ module msu_audio(
         end
         WAITING_SD_STATE: begin
           if (sd_ack_1) begin
+            debug_here <= 8'd1;
             // Wait for ACK
             sd_rd_1 <= 1'b0;
             // sd_ack goes high at the start of a sector transfer (and during)
@@ -170,22 +186,17 @@ module msu_audio(
             audio_play <= 0;
             state <= PAUSED_STATE;
           end else begin
-            // Playback mode can change after trig_play
-            if (!repeat_in) begin
-              // Audio is non repeating
-              mode <= 8'd1;
-            end else begin
-              // Audio is repeating
-              mode <= 8'd2;
-            end
             // Keep collecting words until we hit the buffer limit 
             if (sd_ack_1 && sd_buff_wr) begin
+              debug_here <= 8'd3;
               word_count <= word_count + 1;
               if (looping) begin
                 // We may need to deal with some remainder samples after the loop frame
                 if (word_count < loop_frame_word_offset) begin
+                  debug_here <= 8'd4; 
                   ignore_sd_buffer_out <= 1;
                 end else begin
+                  debug_here <= 8'd5;
                   looping <= 0;
                   ignore_sd_buffer_out <= 0;
                 end
@@ -195,6 +206,7 @@ module msu_audio(
               word_count <= 0;
             end
             if (partial_frame_state == 1 && word_count == end_frame_word_offset) begin
+              debug_here <= 8'd6;
               word_count <= 0;
               partial_frame_state <= 2;
             end
@@ -221,7 +233,8 @@ module msu_audio(
           // Final frame handling
           if (audio_play && end_frame_byte_offset == 0) begin
             // Handle a full frame
-            if (mode == 8'd1) begin
+            if (!repeat_in) begin
+              debug_here <= 8'd7;
               // Full final frame, stopped
               audio_play <= 0;
               state <= 0;
@@ -229,6 +242,7 @@ module msu_audio(
               sd_lba_1 <= 0;
               looping <= 0;
             end else begin
+              debug_here <= 8'd8;
               // Full final frame, Looped
               current_frame <= loop_frame;
               sd_lba_1 <= loop_frame;
@@ -251,7 +265,8 @@ module msu_audio(
               end
               2: begin
                 // We've reached the end of the partial frame now.. handle stopping/looping
-                if (mode == 8'd1) begin
+                if (!repeat_in) begin
+                  debug_here <= 8'd9;
                   // Stopping
                   audio_play <= 0;
                   state <= WAITING_FOR_PLAY_STATE;
@@ -261,11 +276,13 @@ module msu_audio(
                   // Loop
                   looping <= 1;
                   if (loop_frame == 0) begin
+                    debug_here <= 8'd10;
                     // Loop frame is zero, so just go back to 0
                     partial_frame_state <= 0;
                     current_frame <= 0;  
                     sd_lba_1 <= 0;
                   end else begin
+                    debug_here <= 8'd11;
                     // Our loop point is a non-zero one, go back to the loop frame next 
                     current_frame <= loop_frame;
                     sd_lba_1 <= loop_frame;

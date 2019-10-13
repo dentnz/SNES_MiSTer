@@ -111,9 +111,10 @@ module hps_io #(parameter STRLEN=0, PS2DIV=0, WIDE=0, VDNUM=4, PS2WE=0)
 
 	// MSU support
 	input      [15:0] msu_trackout,
+	input	            msu_trackrequest_in,
 	output reg        msu_trackmounting = 0,
 	output reg        msu_trackmissing = 0,
-	output reg 		  msu_trackfinished = 0,
+	output reg 		    msu_trackfinished = 0,
 
 	// ps2 keyboard emulation
 	output            ps2_kbd_clk_out,
@@ -320,6 +321,8 @@ always@(posedge clk_sys) begin
 	reg  [3:0] stflg = 0;
 	reg [31:0] status_req;
 	reg        old_status_set = 0;
+	reg        msu_trackrequest = 0;
+	reg        msu_trackrequest_in_old = 0;
 
 	old_status_set <= status_set;
 	if(~old_status_set & status_set) begin
@@ -327,6 +330,11 @@ always@(posedge clk_sys) begin
 		status_req <= status_in;
 	end
 	
+	msu_trackrequest_in_old <= msu_trackrequest_in;
+	if (~msu_trackrequest_in_old & msu_trackrequest_in) begin
+		msu_trackrequest <= 1;
+	end
+
 // sd_cmd = {2'b00, sd_wr[3], sd_wr[2], sd_wr[1], sd_rd[3], sd_rd[2], sd_rd[1], 4'b0101, sd_conf, 1'b1, sd_wr[0], sd_rd[0]};	// Just for notes. ElectronAsh.
 
 	if (status[0]) begin	// RESET bit, from the HPS.
@@ -342,6 +350,7 @@ always@(posedge clk_sys) begin
 		sd_cmd[11] <= 0;
 		sd_cmd[12] <= 0;
 		sd_cmd[13] <= 0;
+		msu_trackrequest <= 0;
 	end
 	else begin
 		// Defaults.
@@ -410,7 +419,6 @@ always@(posedge clk_sys) begin
 		msu_trackmissing <= 0;
 	end else begin
 		if(io_strobe) begin
-
 			io_dout <= 0;
 			if(~&byte_cnt) byte_cnt <= byte_cnt + 1'd1;
 
@@ -590,7 +598,14 @@ always@(posedge clk_sys) begin
 					end
 					'h50: begin
 						// To main_mister: Selected track, zero if stopped
-						io_dout <= msu_trackout;        
+                        case (byte_cnt)
+							1: io_dout <= msu_trackout;
+							2: begin
+								io_dout <= msu_trackrequest;
+								// Now that main_mister has read the trackout, we clear this flag
+								msu_trackrequest <= 1'b0;
+							end
+						endcase
 					end
 					'h51: begin
 						// From main_mister: Selected track mounted state

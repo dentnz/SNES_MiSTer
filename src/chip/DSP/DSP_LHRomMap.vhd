@@ -50,6 +50,7 @@ entity DSP_LHRomMap is
 		BSRAM_MASK	: in std_logic_vector(23 downto 0);
 
 		MSU_TRACKOUT          : out std_logic_vector(15 downto 0);
+		MSU_TRACKREQUEST      : out std_logic;
 		MSU_TRACKMOUNTING     : in  std_logic;
 		MSU_TRACKFINISHED     : in  std_logic;
 		MSU_TRIG_PLAY         : out std_logic;
@@ -113,6 +114,7 @@ architecture rtl of DSP_LHRomMap is
 		    DOUT            : out std_logic_vector(7 downto 0);
 
 			track_out       : out std_logic_vector(15 downto 0);
+			track_request   : out std_logic;
 			track_mounting  : in  std_logic;
 			track_finished  : in  std_logic;
 			trig_play       : out std_logic;
@@ -295,6 +297,7 @@ begin
 		DOUT		  => MSU_DO,
 
 		track_out     => MSU_TRACKOUT,
+		track_request => MSU_TRACKREQUEST,
 		track_mounting=> MSU_TRACKMOUNTING,
 		track_finished=> MSU_TRACKFINISHED,
 		trig_play     => MSU_TRIG_PLAY,
