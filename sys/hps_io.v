@@ -331,7 +331,8 @@ always@(posedge clk_sys) begin
 	end
 	
 	msu_trackrequest_in_old <= msu_trackrequest_in;
-	if (~msu_trackrequest_in_old & msu_trackrequest_in) begin
+	// Falling edge of track request
+	if (msu_trackrequest_in_old & ~msu_trackrequest_in) begin
 		msu_trackrequest <= 1;
 	end
 
@@ -597,8 +598,8 @@ always@(posedge clk_sys) begin
 						msu_trackmounting <= 0;
 					end
 					'h50: begin
-						// To main_mister: Selected track, zero if stopped
-                        case (byte_cnt)
+						// To main_mister: Selected track
+						case (byte_cnt)
 							1: io_dout <= msu_trackout;
 							2: begin
 								io_dout <= msu_trackrequest;

@@ -33,15 +33,12 @@ module msu_audio(
   reg [20:0] loop_frame;
   reg [8:0] loop_frame_word_offset;
   reg looping;
-  reg [7:0] state;
-  
-  // End frame handling
   reg [20:0] end_frame;
   reg [8:0] end_frame_byte_offset;
   reg [8:0] end_frame_word_offset;
   reg [7:0] partial_frame_state;
   reg [20:0] current_frame;
-   
+ 
   initial begin
   looping = 0;
   state = 8'd0;
@@ -67,30 +64,9 @@ module msu_audio(
   wire [31:0] loop_index_in_frames_full = loop_index[31:0] >> 7;  
   
   reg just_reset = 0;
-  // Falling edge detection for track missing
   reg trackmissing_1 = 1'b1;
+  reg [7:0] state;
 
-  // always @(*) begin
-  //   if (reset || trackmounting) begin
-  //     loop_index = 0;
-      
-  //     loop_frame = 0;
-  //     loop_frame_word_offset = 0;
-  //   end else begin
-  //     // if (sd_ack_1 && sd_lba_1==0 && word_count==2 && sd_buff_wr) begin
-  //     //   loop_index[15:0] = sd_buff_dout;
-  //     // end
-  //     // if (sd_ack_1 && sd_lba_1==0 && word_count==3 && sd_buff_wr) loop_index[31:16] = sd_buff_dout;
-
-  //     // if (sd_ack_1 && sd_lba_1==0 && word_count==4 && sd_buff_wr) begin
-  //     //   // Now that we have the complete 8 byte header, we have a possible loop_index to handle
-  //     //   loop_frame = loop_index_in_frames_full[20:0];
-  //     //   // Take the last 9 bits (512 byte sectors)
-  //     //   loop_frame_word_offset = loop_index_in_words_full[8:0] + 9'd2;
-  //     // end
-  //   end
-  // end  
- 
   always @(posedge clk) begin
     if (reset || trackmounting || trackmissing_reset) begin
       // Stop any existing audio playback
@@ -145,7 +121,6 @@ module msu_audio(
         // Now that we have the complete 8 byte header, we have a possible loop_index to handle
         loop_frame <= loop_index_in_frames_full[20:0];
         // Take the last 9 bits (512 byte sectors, 256 words)
-        //loop_frame_word_offset <= loop_index_in_words_full[8:0] + 9'd2;
         loop_frame_word_offset <= loop_index_in_words_full[7:0] + 9'd2;
       end
       case (state)

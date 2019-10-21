@@ -291,6 +291,7 @@ reg   		msu_trackmounting = 0;
 reg         msu_trackmissing = 0;
 reg			msu_trackmissing_reset = 0;
 reg			msu_trackfinished = 0;
+wire [64:0] RTC;
 
 hps_io #(.STRLEN($size(CONF_STR)>>3), .WIDE(1)) hps_io
 (
@@ -343,7 +344,9 @@ hps_io #(.STRLEN($size(CONF_STR)>>3), .WIDE(1)) hps_io
 
 	.img_mounted(img_mounted),
 	.img_readonly(img_readonly),
-	.img_size(img_size)
+	.img_size(img_size),
+	
+	.RTC(RTC)
 );
 
 wire       GUN_BTN = status[27];
@@ -472,6 +475,7 @@ main main
 	.MSU_DATA_IN(msu_data_in),
 	.MSU_DATA_BUSY(msu_data_busy),
 	.MSU_DATA_SEEK(msu_data_seek),
+	.MSU_DATA_REQ(msu_data_req),
 
 	.ROM_TYPE(rom_type),
 	.ROM_MASK(rom_mask),
@@ -535,6 +539,8 @@ main main
 	.JOY1_P6(JOY1_P6),
 	.JOY2_P6(JOY2_P6),
 	.JOY2_P6_in(JOY2_P6_DI),
+	
+	.EXT_RTC(RTC),
 
 	.GG_EN(status[24]),
 	.GG_CODE(gg_code),
@@ -839,10 +845,6 @@ lightgun lightgun
 ///////////////////////////  MSU Audio  ///////////////////////////////
 // Please use SD2SNES compatible MSU1 hacks *only*
 //
-// Things still need to do:
-// - trig_stop (track 0 select)
-// - Same track selection
-//
 // Many thanks to ElectronAsh and Qwertymodo for helping me get my head around this
 // Extra respect to Qwertymodo for creating msu1.sfc!
 // Thanks to Uigiflip, BrunoSilva for testing
@@ -895,15 +897,13 @@ wire msu_header_skip = sd_lba_1==0 && (msu_audio_word_count >= 0 && msu_audio_wo
 reg [15:0] msu_audio_l;
 reg [15:0] msu_audio_r;
 
-cd_audio_fifo cd_audio_fifo_inst (
+msu_audio_fifo msu_audio_fifo_inst (
 	.aclr(audio_fifo_reset),
-
 	.wrclk(clk_sys),
 	.wrreq(audio_fifo_wr),
 	.wrfull(audio_fifo_full),
 	.wrusedw(audio_fifo_usedw),
 	.data(sd_buff_dout),
-	
 	.rdclk(CLK_50M),
 	.rdreq(audio_fifo_rd),
 	.rdempty(audio_fifo_empty),
@@ -942,58 +942,137 @@ wire signed [23:0] msu_vol_mix_r = $signed(samp_r) * msu_vol_signed;
 assign msu_audio_l = (msu_audio_play) ? msu_vol_mix_l[23:8] : 16'h0000;
 assign msu_audio_r = (msu_audio_play) ? msu_vol_mix_r[23:8] : 16'h0000;
 
-// MSU datafile state machine
-// Commented out for now
-always @(posedge clk_sys or posedge reset) begin
-/*
-	if (reset) begin
-		msu_data_busy <= 1'b0;	// Should maybe have this set HIGH after reset, but TESTING for now! ElectronAsh.
-		msu_data_sector_old <= 23'h000000;
+///////////////////////////  MSU Data  ////////////////////////////////
+
+(*noprune*) reg [7:0] msu_data_debug = 0;
+// MSU Data track reading state machine
+always @(posedge clk_sys or posedge reset)
+if (reset) begin
+	msu_data_state <= 8'd4;
+	msu_data_wordcount <= 0;
+
+	allow_data_fifo_wr <= 1'b1;
+	sd_rd[2] <= 1'b0;
+	// Should maybe have this set HIGH after reset, but TESTING for now! ElectronAsh
+	msu_data_busy <= 1'b0;
+	msu_data_debug <= 8'd0;
+end
+else begin
+	msu_data_debug <= 8'd0;
+
+	msu_data_addr_bit1_old <= msu_data_addr[1];
+
+	if (msu_data_seek) begin
+		msu_data_busy <= 1'b1;
+		msu_data_state <= 8'd0;
 	end
-	else begin
-		case (msu_data_state)
-		0: begin
-			if (//msu_data_seek &&
-				 ( msu_data_addr>>9 != msu_data_sector_old) ) begin	// Check to see if we've already read this sector
-				//msu_audio_play <= 1'b0;	// STOP audio playback when data is requested?
-				msu_data_sector_old <= msu_data_addr>>9;
-				sd_lba_2 <= msu_data_addr >> 9;	// Request the SECTOR that we need. (shift "msu_data_addr" by 9 (divide), to find which 512-byte sector the data is in).
-				sd_rd[2] <= 1'b1;
-				msu_data_busy <= 1'b1;		// TESTING!!
-				msu_data_wordcount <= 8'd0;
-				msu_data_state <= msu_data_state + 1;
-			end
-		end
-			
-		1: if (sd_ack[2]) begin		// Sector transfer has started. (Need to check sd_ack[2], so we know the data is for us.)
-			sd_rd[2] <= 1'b0;
+	
+	case (msu_data_state)
+	0: begin
+		if (msu_data_busy) begin
+			// A new msu_seek uses the sector offset directly...
+			sd_lba_2 <= msu_data_sector;
 			msu_data_state <= msu_data_state + 1;
+			msu_data_debug <= 8'd1;
 		end
-		
-		2: begin
-			if (sd_buff_wr) begin
-				msu_data_buff[msu_data_wordcount] <= sd_buff_dout;	// Write one WORD to the data buffer every time sd_buff_wr pulses HIGH.
-				msu_data_wordcount <= msu_data_wordcount + 1;		// Increment the word count.
-			end
-			
-			if (!sd_ack[2]) begin							// If sd_ack[2] goes LOW, then the sector transfer has finished.
-				msu_data_busy <= 1'b0;						// Let the MSU know it can read the data byte.
-				msu_data_state <= 0;							// Back to idle state.
-			end
+		//else if (msu_data_fifo_usedw < 12'd3583) begin
+		else if (msu_data_fifo_usedw < 16'd7936) begin
+			// But the rest of the time, we're loading new sectors into the FIFO as 
+			// quickly as possible (when it has enough space)
+			sd_lba_2 <= sd_lba_2 + 1;
+			msu_data_state <= msu_data_state + 1;
+			msu_data_debug <= 8'd2;
 		end
-		
-		default:;
-		endcase
 	end
-*/
+		
+	// Request a sector from the HPS (sd_lba_2 has to be set in the previous state)...
+	1: begin
+		sd_rd[2] <= 1'b1;
+		msu_data_wordcount <= 8'd0;
+			
+		if (msu_data_byte_offset > 0) begin
+			msu_data_debug <= 8'd3;
+			// If the byte offset (within a sector boundary) is non-zero, then we have to
+			// inhibit writes to the data FIFO until we see the correct offset
+			allow_data_fifo_wr <= 1'b0;
+		end else begin
+			msu_data_debug <= 8'd4;
+			allow_data_fifo_wr <= 1'b1;
+		end
+
+		msu_data_state <= msu_data_state + 1;
+	end
+		
+	2: if (sd_ack[2]) begin
+		// Sector transfer has started. (Need to check sd_ack[2], so we know the data is for us.)
+		sd_rd[2] <= 1'b0;
+		msu_data_state <= msu_data_state + 1;
+	end
+	
+	3: begin
+		// Only allow writes to the FIFO once the current WORD offset (from the HPS transfer)
+		// matches the requested WORD offset (from the MSU)...
+		if (msu_data_wordcount >= msu_data_byte_offset >> 1) allow_data_fifo_wr <= 1'b1;
+	
+		if (sd_ack[2] && sd_buff_wr) begin
+			msu_data_wordcount <= msu_data_wordcount + 1;	// Increment the word count.
+		end
+		
+		// If sd_ack[2] goes LOW, then the sector transfer has finished.
+		if (!sd_ack[2]) begin
+			// Let the MSU know the seek has finished.
+			msu_data_busy <= 1'b0;
+			// Back to state 0. (further sectors will get fetched into the FIFO at state 0.)
+			msu_data_state <= 0;
+		end
+	end
+
+	4: begin
+		msu_data_debug <= 8'd5;
+		// Paused
+	end
+	
+	default:;
+	endcase
 end
 
-reg [15:0] msu_data_buff [0:255];
-(*noprune*) reg [1:0] msu_data_state = 2'd0;
-(*noprune*) reg [7:0] msu_data_wordcount = 2'd0;
-reg [22:0] msu_data_sector_old = 23'h000000;
+wire msu_data_req;
+wire [22:0] msu_data_sector = msu_data_addr[31:9];
+// 512 bytes in a sector
+wire [8:0] msu_data_byte_offset = msu_data_addr[8:0];
+// Clear the FIFO, for only ONE clock pulse, else it will clear the first sector we transfer.
+wire msu_data_fifo_clear = msu_data_seek || reset;
+// Flag used to inhibit writes to the data FIFO when the seek address is not on a 512-byte sector boundary.
+reg allow_data_fifo_wr;	
+wire msu_data_fifo_wr = !msu_data_fifo_full && allow_data_fifo_wr && sd_ack[2] && sd_buff_wr;
+wire [15:0] msu_data_fifo_dout;
+wire msu_data_fifo_empty;
+wire msu_data_fifo_full;
+wire [15:0] msu_data_fifo_usedw;
 
-assign msu_data_in = (!msu_data_addr[0]) ? msu_data_buff[msu_data_addr[31:1]][7:0] : msu_data_buff[msu_data_addr[31:1]][15:8];
+reg msu_data_addr_bit1_old;
+wire msu_data_fifo_rdreq = msu_data_req && (msu_data_addr_bit1_old != msu_data_addr[1]);
+
+msu_data_fifo msu_data_fifo_inst (
+	.aclr(msu_data_fifo_clear),
+	.wrclk(clk_sys),
+	.wrreq(msu_data_fifo_wr),
+	.wrfull(msu_data_fifo_full),
+	.wrusedw(msu_data_fifo_usedw),
+	.data(sd_buff_dout),
+	.rdclk(clk_sys),
+	.rdreq(msu_data_fifo_rdreq),
+	.rdempty(msu_data_fifo_empty),
+	.q(msu_data_fifo_dout)	
+);
+
+(*noprune*) reg [7:0] msu_data_state = 2'd4;
+(*noprune*) reg [7:0] msu_data_wordcount = 2'd0;
+
+// Select the lower or upper byte from the 16-bit data from the buffer, depending on the LSB bit of msu_data_addr...
+// (because hps_io is set up to transfer 16-bit words, which is handy for audio track playback, but msu_data reads are 8-bit.) ElectronAsh.
+//assign msu_data_in = (!msu_data_addr[0]) ? msu_data_buff[msu_data_addr[31:1]][7:0] : msu_data_buff[msu_data_addr[31:1]][15:8];
+assign msu_data_in = (!msu_data_addr[0]) ? msu_data_fifo_dout[7:0] : msu_data_fifo_dout[15:8];
 
 // Indexes:
 // 0 = D+    = Latch

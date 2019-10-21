@@ -7,6 +7,9 @@ use IEEE.STD_LOGIC_UNSIGNED.ALL;
 use IEEE.STD_LOGIC_TEXTIO.all;
 
 entity DSP_LHRomMap is
+	generic (
+		USE_DSPn	: in std_logic := '1'
+	);
 	port(
 		MCLK			: in std_logic;
 		RST_N			: in std_logic;
@@ -64,6 +67,9 @@ entity DSP_LHRomMap is
 		MSU_DATA_IN           : in  std_logic_vector(7 downto 0);
 		MSU_DATA_BUSY		  : in  std_logic;
 		MSU_DATA_SEEK		  : out std_logic;
+		MSU_DATA_REQ		  : out std_logic;
+		
+		EXT_RTC		: in std_logic_vector(64 downto 0);
 		
 		BRK_OUT		: out std_logic;
 		DBG_REG		: in std_logic_vector(7 downto 0) := (others => '0');
@@ -76,6 +82,7 @@ end DSP_LHRomMap;
 architecture rtl of DSP_LHRomMap is
 
 	signal CART_ADDR 		: std_logic_vector(23 downto 0);
+	signal ROM_SEL 		: std_logic;
 	signal BRAM_ADDR 		: std_logic_vector(19 downto 0);
 	signal BSRAM_SEL 		: std_logic;
 	signal DP_SEL    		: std_logic;
@@ -93,6 +100,10 @@ architecture rtl of DSP_LHRomMap is
 	signal MSU_SEL          : std_logic;
 	signal MSU_DO           : std_logic_vector(7 downto 0);
 
+	
+	signal SRTC_DO 		: std_logic_vector(7 downto 0);
+	signal SRTC_SEL		: std_logic;
+	
 	signal OPENBUS   		: std_logic_vector(7 downto 0);
 
 	signal MAP_DSP_SEL 	: std_logic;
@@ -131,12 +142,14 @@ architecture rtl of DSP_LHRomMap is
 			
 			msu_data_addr			: out std_logic_vector(31 downto 0);
 			msu_data_in				: in std_logic_vector(7 downto 0);
-			msu_status_data_busy : in std_logic;
-			msu_data_seek			: out std_logic
+			msu_status_data_busy 	: in std_logic;
+			msu_data_seek			: out std_logic;
+			msu_data_req			: out std_logic
 		);
 	end component;
+		
 begin
-	
+		
 	CEGen : entity work.CEGen
 	port map(
 		CLK     => MCLK,
@@ -233,9 +246,13 @@ begin
 	MAP_DSP_SEL <= not MAP_CTRL(6) and (MAP_CTRL(7) or not (MAP_CTRL(5) or MAP_CTRL(4)));	--8..B
 	MAP_OBC1_SEL <= MAP_CTRL(7) and MAP_CTRL(6) and not MAP_CTRL(5) and not MAP_CTRL(4);	--C
 	MAP_ACTIVE <= MAP_DSP_SEL or MAP_OBC1_SEL or MSU_SEL;
+	SRTC_SEL <= '1' when CA(22) = '0' and CA(15 downto 1) = x"280"&"000" else '0';
+	ROM_SEL <= not ROMSEL_N and not DSP_SEL and not DP_SEL and not SRTC_SEL and not BSRAM_SEL and not OBC1_SEL;
+	
 
 	DSP_CS_N <= not DSP_SEL;
-	
+
+	DSPn_BLOCK: if USE_DSPn = '1' generate
 	DSPn : entity work.DSPn
 	port map(
 		CLK			=> MCLK,
@@ -260,7 +277,8 @@ begin
 		DBG_DAT_OUT	=> DBG_DAT_OUT,
 		DBG_DAT_WR	=> DBG_DAT_WR
 	);
-	
+	end generate;
+
 	OBC1 : entity work.OBC1
 	port map(
 		CLK			=> MCLK,
@@ -313,9 +331,27 @@ begin
 		msu_data_addr => MSU_DATA_ADDR,
 		msu_data_in => MSU_DATA_IN,
 		msu_status_data_busy => MSU_DATA_BUSY,
-		msu_data_seek => MSU_DATA_SEEK
+		msu_data_seek => MSU_DATA_SEEK,
+		msu_data_req => MSU_DATA_REQ
 	);
 
+	
+	SRTC : entity work.SRTC
+	port map(
+		CLK			=> MCLK,
+
+		A0				=> CA(0),
+		DI				=> DI,
+		DO				=> SRTC_DO,
+		CS				=> SRTC_SEL,
+		CPURD_N		=> CPURD_N,
+		CPUWR_N		=> CPUWR_N,
+		
+		SYSCLKF_CE	=> SYSCLKF_CE,
+		
+		EXT_RTC		=> EXT_RTC
+	);
+	
 	ROM_RD <= (SYSCLKF_CE or SYSCLKR_CE) when rising_edge(MCLK);
 
 	ROM_ADDR <= CART_ADDR and ROM_MASK;
@@ -340,7 +376,9 @@ begin
 		end if;
 	end process;
 	
-	DO <= DSP_DO when DSP_SEL = '1' or DP_SEL = '1' else
+	DO <= ROM_Q(7 downto 0) when ROM_SEL = '1' else
+			DSP_DO when DSP_SEL = '1' or DP_SEL = '1' else
+			SRTC_DO when SRTC_SEL = '1' else
 			BSRAM_Q when BSRAM_SEL = '1' or OBC1_SEL = '1' else
 			ROM_Q(7 downto 0) when ROMSEL_N = '0' else
 			-- @todo testing

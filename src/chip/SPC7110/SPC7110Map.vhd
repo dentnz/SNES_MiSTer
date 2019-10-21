@@ -49,6 +49,8 @@ entity SPC7110Map is
 		ROM_MASK		: in std_logic_vector(23 downto 0);
 		BSRAM_MASK	: in std_logic_vector(23 downto 0);
 		
+		EXT_RTC		: in std_logic_vector(64 downto 0);
+		
 		BRK_OUT		: out std_logic;
 		DBG_REG		: in std_logic_vector(7 downto 0) := (others => '0');
 		DBG_DAT_IN	: in std_logic_vector(7 downto 0) := (others => '0');
@@ -121,14 +123,15 @@ begin
 	
 	RTC : entity work.RTC4513
 	port map(
-		RST_N			=> RST_N and MAP_SEL,
 		CLK			=> MCLK,
 		ENABLE		=> ENABLE,
 
 		DO				=> RTC_DO,
 		DI				=> RTC_DI,
 		CE				=> RTC_CE,
-		CK				=> RTC_CK
+		CK				=> RTC_CK,
+		
+		EXT_RTC		=> EXT_RTC
 	);
 	
 	
@@ -198,8 +201,8 @@ begin
 	BSRAM_OE_N <= CPURD_N;
 	BSRAM_WE_N <= CPUWR_N;
 
-	DO <= BSRAM_Q when SRAM_CE_N = '0' else 
-			ROM_Q(7 downto 0) when PROM_OE_N = '0' or SNES_DROM_OE_N = '0' else
+	DO <= ROM_Q(7 downto 0) when PROM_OE_N = '0' or SNES_DROM_OE_N = '0' else
+			BSRAM_Q when SRAM_CE_N = '0' else 
 			SPC7110_DO;
 			
 	IRQ_N <= '1';

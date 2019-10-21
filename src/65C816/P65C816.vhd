@@ -48,7 +48,8 @@ architecture rtl of P65C816 is
 	signal STATE, NextState : unsigned(3 downto 0);
 	signal LAST_CYCLE : std_logic;
 	signal GotInterrupt : std_logic;
-	signal IsResetInterrupt, IsNMIInterrupt, IsIRQInterrupt, IsABORTInterrupt, IsCOPInterrupt : std_logic;
+	signal IsResetInterrupt, IsNMIInterrupt, IsIRQInterrupt, IsABORTInterrupt : std_logic;
+	signal IsBRKInterrupt, IsCOPInterrupt : std_logic;
 	signal JumpTaken, JumpNoOverflow, IsBranchCycle1 : std_logic;
 	signal w16 : std_logic;
 	signal DLNoZero : std_logic;
@@ -220,23 +221,25 @@ begin
 			 '1' when (MC.LOAD_AXY(1) = '1') and XF = '0' and EF = '0' else
 			 '0';
 			 
-	SB <= A           when MC.BUS_CTRL(5 downto 3) = "000" else
-		   X           when MC.BUS_CTRL(5 downto 3) = "001" else
-		   Y           when MC.BUS_CTRL(5 downto 3) = "010" else
-		   D           when MC.BUS_CTRL(5 downto 3) = "011" else
-		   T           when MC.BUS_CTRL(5 downto 3) = "100" else
-			SP          when MC.BUS_CTRL(5 downto 3) = "101" else
-			x"00" & PBR when MC.BUS_CTRL(5 downto 3) = "110" else
-			x"00" & DBR when MC.BUS_CTRL(5 downto 3) = "111" else
-			x"0000";
+	with MC.BUS_CTRL(5 downto 3) select
+		SB <= A           when "000",
+				X           when "001",
+				Y           when "010",
+				D           when "011",
+				T           when "100",
+				SP          when "101",
+				x"00" & PBR when "110",
+				x"00" & DBR when "111",
+				x"0000"	   when others;
 	
-	DB <= x"00" & D_IN when MC.BUS_CTRL(2 downto 0) = "000" else
-		   D_IN & DR    when MC.BUS_CTRL(2 downto 0) = "001" else
-		   SB           when MC.BUS_CTRL(2 downto 0) = "010" else
-		   D            when MC.BUS_CTRL(2 downto 0) = "011" else
-		   T            when MC.BUS_CTRL(2 downto 0) = "100" else
-			x"0001"      when MC.BUS_CTRL(2 downto 0) = "101" else
-			x"0000";
+	with MC.BUS_CTRL(2 downto 0) select
+		DB <= x"00" & D_IN when "000",
+				D_IN & DR    when "001",
+				SB           when "010",
+				D            when "011",
+				T            when "100",
+				x"0001"      when "101",
+				x"0000" 		 when others;
 			
 	ALU: entity work.ALU
 	port map (
@@ -516,6 +519,7 @@ begin
 		end if;
 	end process; 
 	
+	IsBRKInterrupt <= '1' when IR = x"00" else '0';
 	IsCOPInterrupt <= '1' when IR = x"02" else '0';
 	IsABORTInterrupt <= '0';
 	
@@ -589,9 +593,9 @@ begin
 	
 	A_OUT <= ADDR_BUS;
 
-	process(MC, IR, LAST_CYCLE, STATE, IRQ_ACTIVE, NMI_ACTIVE)
+	process(MC, IR, LAST_CYCLE, STATE, IRQ_ACTIVE, NMI_ACTIVE, IsBRKInterrupt, IsCOPInterrupt, GotInterrupt )
 		variable rmw : std_logic;
-		variable twoCls : std_logic;
+		variable twoCls, softInt : std_logic;
 	begin
 		 if IR = x"06" or IR = x"0E" or IR = x"16" or IR = x"1E" or 
 			 IR = x"C6" or IR = x"CE" or IR = x"D6" or IR = x"DE" or 
@@ -622,8 +626,15 @@ begin
 		else
 			twoCls := '0';
 		end if;
+		
+		if (IsBRKInterrupt = '1' or IsCOPInterrupt = '1') and STATE = 1 and GotInterrupt = '0' then
+			softInt := '1';
+		else
+			softInt := '0';
+		end if;
+		
 		VDA <= MC.VA(1);
-		VPA <= MC.VA(0) or (twoCls and (IRQ_ACTIVE or NMI_ACTIVE));
+		VPA <= MC.VA(0) or (twoCls and (IRQ_ACTIVE or NMI_ACTIVE)) or softInt;
 	end process;
 	
 	RDY_OUT <= EN;

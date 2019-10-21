@@ -11,6 +11,7 @@ module MSU(
     output reg  [7:0] DOUT,
 
     // Audio HPS control
+    // @todo remove this addr_out... we have data_addr_out
     output     [31:0] addr_out,
 (*keep*) output reg [15:0] track_out,
     output            track_request,
@@ -36,6 +37,9 @@ module MSU(
     input [7:0] msu_data_in,
     input msu_status_data_busy,
     output reg msu_data_seek,
+    output reg msu_data_req,
+
+    // Debug stuff
     output reg [7:0] dbg_msu_reg,
     output reg [7:0] dbg_msu_status
 );
@@ -45,16 +49,21 @@ initial begin
     msu_status_audio_repeat = 0;
     msu_status_audio_playing_out = 0;
     msu_status_track_missing = 0;
-    msu_data_addr = 0;
     track_out = 0;
     trig_play = 0;
     trig_pause = 0;
-    dbg_msu_reg = 0;
+
     track_mounting_falling = 0;
     track_mounting_old = 0;
     track_mounting_falling_old = 0;
     track_mounting_falling_rising = 0;
     track_change_audio_busy = 0;
+
+    msu_data_addr = 0;
+    msu_data_req <= 0;
+    msu_data_seek <= 0;
+
+    dbg_msu_reg = 0;
 end
 
 assign volume_out = MSU_VOLUME;
@@ -71,14 +80,9 @@ wire [7:0] MSU_STATUS = {
     msu_status_track_missing, 
     msu_status_revision
 };
-
 assign dbg_msu_status = MSU_STATUS;
 
-// MSU_READ - $2001
-//reg [31:0] msu_data_addr;
-//initial msu_data_addr = 32'h00000000;
-//reg msu_data;
-//reg [7:0] MSU_READ;
+initial msu_data_addr = 32'h00000000;
 
 // MSU_ID - $2002 to $2007
 // 'S-MSU1' identity string is at MSU_ID during reading of $2002 to $2007
@@ -95,9 +99,10 @@ assign MSU_ID[5] = "1";
 reg [31:0] MSU_SEEK;                      // $2000 - $2003
 reg [15:0] MSU_TRACK;                     // $2004 - $2005
 reg  [7:0] MSU_VOLUME;                    // $2006
-reg  [7:0] MSU_CONTROL;                   // $2007
+(*keep*) reg  [7:0] MSU_CONTROL;                   // $2007
 reg [31:0] MSU_ADDR;
 
+// @todo can probably delete this msu_data_addr is used instead
 assign addr_out = MSU_ADDR;
 
 // Make sure we are aware of which bank ADDR is currently in 
@@ -106,7 +111,10 @@ assign addr_out = MSU_ADDR;
 // Rising and falling edge detection
 reg RD_N_1 = 1'b1;
 reg WR_N_1 = 1'b1;
-reg msu_status_track_missing_in_1 = 1'b1;
+reg RD_N_falling = 0;
+reg WR_N_falling = 0;
+
+reg msu_status_track_missing_in_1 = 1'b0;
 reg msu_status_audio_playing_in_old = 0;
 
 // track mounting with respect to audio busy
@@ -118,7 +126,10 @@ reg track_change_audio_busy = 0;
 
 always @(posedge CLK or negedge RST_N) begin
     if (~RST_N) begin
-        // Handle RESET
+        RD_N_1 = 1;
+        WR_N_1 = 1;
+        DOUT <= 0;
+
         MSU_SEEK <= 0;
         MSU_TRACK <= 16'h0000;
         track_out <= 16'h0000;
@@ -129,27 +140,26 @@ always @(posedge CLK or negedge RST_N) begin
         msu_status_audio_playing_in_old <= 0;
         msu_status_audio_repeat <= 0;
         msu_status_track_missing <= 0;
-        msu_status_track_missing_in_1 <= 1;
-        RD_N_1 = 1;
-        WR_N_1 = 1;
-        DOUT <= 0;
+        msu_status_track_missing_in_1 <= 0;
         trig_play <= 0;
         trig_pause <= 0;
-        msu_data_seek <= 0;
-        msu_data_addr <= 32'h00000000;
-
         track_mounting_old <= 0;
         track_mounting_falling_old <= 0;
         track_change_audio_busy <= 0;
+
+        msu_data_req <= 0;
+        msu_data_seek <= 0;
+        msu_data_addr <= 32'h00000000;
+
         dbg_msu_reg <= 0;
     end else begin
         // Reset our play/pause/request triggers for pulsing
         trig_play <= 0;
         trig_pause <= 0;
         track_request <= 0;
-
-        // @todo data stuff to come
-        //msu_data_seek <= 0;
+        // Pulses for data
+        msu_data_seek <= 0;
+        msu_data_req <= 0;
 
         // Rising and falling edge detection stuff
         RD_N_1 <= RD_N;
@@ -157,12 +167,6 @@ always @(posedge CLK or negedge RST_N) begin
         msu_status_track_missing_in_1 <= msu_status_track_missing_in;
         track_mounting_old <= track_mounting;
         msu_status_audio_playing_in_old <= msu_status_audio_playing_in;
-
-        // Status reads... this could go back in our read block below
-        // if (ENABLE && IO_BANK_SEL && ADDR[15:0]==16'h2000 && (!RD_N_1 && RD_N) ) begin
-        //     DOUT <= MSU_STATUS;
-        //     dbg_msu_reg <= 8'd1;
-        // end
 
         // Falling edge of track mounting
         if (track_mounting_falling) begin
@@ -172,15 +176,16 @@ always @(posedge CLK or negedge RST_N) begin
         end
 
         // RISING edge of RD_N, when it goes to idle
-        // So the address increments AFTER the SNES has read the data from the CURRENT address.
-        // 0x2001 = MSU DATA Port.
+        // So the address increments AFTER the SNES has read the data from the CURRENT address
+        // 0x2001 = MSU DATA Port
         // if (ENABLE && IO_BANK_SEL && ADDR[15:0]==16'h2001 && (!RD_N_1 && RD_N) ) begin
         //     msu_data_addr <= msu_data_addr + 1;
+        //     msu_data_req <= 1'b1;
         // end
 
         // FALLING edge of WR_N.
         // 0x2003 = MSU SEEK Port
-        // if (ENABLE && IO_BANK_SEL && ADDR[15:0]==16'h2003 && (WR_N_1 && !WR_N) ) begin
+        // if (ENABLE && IO_BANK_SEL && ADDR[15:0]==16'h2003 && (WR_N_1 && !WR_N)) begin
         //     // A write to 0x2003 triggers the update of msu_data_addr...
         //     msu_data_addr <= {DIN, MSU_SEEK[23:0]};
         //     // And a SINGLE clock pulse of msu_data_seek
@@ -200,11 +205,12 @@ always @(posedge CLK or negedge RST_N) begin
             // Update our status register flag to indicate that the player has stopped playing
             msu_status_audio_playing_out <= 0;
         end
-              
+    
         // Register writes
-        if (ENABLE & ~WR_N & IO_BANK_SEL) begin
+        //if (ENABLE & IO_BANK_SEL & ~WR_N) begin
+        if (ENABLE & IO_BANK_SEL & WR_N_falling) begin
             case (ADDR[15:0])
-                // Data seek address. MSU_SEEK, LSB byte.
+                // Data seek address. MSU_SEEK, LSB byte
                 16'h2000: begin
                     MSU_SEEK[7:0] <= DIN;
                 end
@@ -216,13 +222,13 @@ always @(posedge CLK or negedge RST_N) begin
                 16'h2002: begin
                     MSU_SEEK[23:16] <= DIN;
                 end
-                // Data seek address. MSU_SEEK, MSB byte.
+                // Data seek address. MSU_SEEK, MSB byte
                 16'h2003: begin
-                    //MSU_SEEK[31:24] <= DIN;
+                    MSU_SEEK[31:24] <= DIN;
                     // A write to 0x2003 triggers the update of msu_data_addr...
-                    //msu_data_addr <= {DIN, MSU_SEEK[23:0]};
-                    // And a pulse of msu_data_seek.
-                    //msu_data_seek <= 1'b1;
+                    msu_data_addr <= {DIN, MSU_SEEK[23:0]};
+                    // And a pulse of msu_data_seek
+                    msu_data_seek <= 1;
                 end
                 // MSU_Track LSB
                 16'h2004: begin
@@ -267,7 +273,9 @@ always @(posedge CLK or negedge RST_N) begin
                 default:;
             endcase
         end 
-        if (ENABLE & ~RD_N & IO_BANK_SEL) begin
+        
+        //if (ENABLE & ~RD_N & IO_BANK_SEL) begin
+        if (ENABLE & IO_BANK_SEL & RD_N_falling) begin
         // Register reads
             case (ADDR[15:0])
                  // MSU_STATUS
@@ -277,11 +285,11 @@ always @(posedge CLK or negedge RST_N) begin
                 end
                 // MSU_READ data
                 16'h2001: begin
-                    // if (!msu_status_data_busy) begin
-                    //     // Data reads increase the memory address by 1
-                    //     msu_data_addr <= msu_data_addr + 1;
-                    // end                    
-                    //DOUT <= MSU_READ;
+                    if (!msu_status_data_busy) begin
+                        // Data reads increase the memory address by 1
+                        msu_data_addr <= msu_data_addr + 1;
+                        msu_data_req <= 1'b1;
+                    end
                     DOUT <= msu_data_in;
                 end
                  // MSU_ID
@@ -309,9 +317,12 @@ always @(posedge CLK or negedge RST_N) begin
     end
 end
 
+assign WR_N_falling = WR_N_1 && !WR_N;
+assign RD_N_falling = RD_N_1 && !RD_N;
+
 assign track_mounting_falling = !track_mounting & track_mounting_old;
 assign track_mounting_falling_rising = track_mounting_falling & !track_mounting_falling_old;
 // Audio busy should happen immediately on track selection, and stop immediately after track is mounted
-assign msu_status_audio_busy = (track_change_audio_busy || track_mounting) && !track_mounting_falling_rising;  
+assign msu_status_audio_busy = (track_change_audio_busy || track_mounting) && !track_mounting_falling_rising;
 
 endmodule
