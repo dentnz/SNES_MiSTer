@@ -483,18 +483,48 @@ sysmem_lite sysmem
 	.vbuf_write(vbuf_write),
 	.vbuf_readdata(vbuf_readdata),
 	.vbuf_readdatavalid(vbuf_readdatavalid),
-	.vbuf_read(vbuf_read)
+	.vbuf_read(vbuf_read),
+	
+	.bridge_m0_waitrequest( bridge_m0_waitrequest ),
+	.bridge_m0_readdata( bridge_m0_readdata ),
+	.bridge_m0_readdatavalid( bridge_m0_readdatavalid ),
+	.bridge_m0_burstcount( bridge_m0_burstcount ),
+	.bridge_m0_writedata( bridge_m0_writedata ),
+	.bridge_m0_address( bridge_m0_address ),
+	.bridge_m0_write( bridge_m0_write ),
+	.bridge_m0_read( bridge_m0_read ),
+	.bridge_m0_byteenable( bridge_m0_byteenable ),
+	.bridge_m0_debugaccess( bridge_m0_debugaccess ),
+	.bridge_m0_clk( FPGA_CLK1_50 )
 );
 
-wire  [27:0] vbuf_address;
-wire   [7:0] vbuf_burstcount;
-wire         vbuf_waitrequest;
-wire [127:0] vbuf_readdata;
-wire         vbuf_readdatavalid;
-wire         vbuf_read;
-wire [127:0] vbuf_writedata;
-wire  [15:0] vbuf_byteenable;
-wire         vbuf_write;
+//(*keep*) wire         bridge_m0_clk = clk_sys;
+
+(*keep*) wire         bridge_m0_waitrequest = 1'b0;
+
+(*keep*) wire [19:0]  bridge_m0_address;
+
+(*keep*) wire         bridge_m0_write;
+(*keep*) wire [31:0]  bridge_m0_writedata;
+(*keep*) wire         bridge_m0_byteenable;
+(*keep*) wire [6:0]   bridge_m0_burstcount;
+
+(*keep*) wire [31:0]  bridge_m0_readdata = 32'hDEADBEEF;
+(*keep*) wire         bridge_m0_readdatavalid = bridge_m0_read;
+(*keep*) wire         bridge_m0_read;
+
+(*keep*) wire         bridge_m0_debugaccess;
+
+
+(*keep*) wire  [27:0] vbuf_address;
+(*keep*) wire   [7:0] vbuf_burstcount;
+(*keep*) wire         vbuf_waitrequest;
+(*keep*) wire [127:0] vbuf_readdata;
+(*keep*) wire         vbuf_readdatavalid;
+(*keep*) wire         vbuf_read;
+(*keep*) wire [127:0] vbuf_writedata;
+(*keep*) wire  [15:0] vbuf_byteenable;
+(*keep*) wire         vbuf_write;
 
 ascal 
 #(
@@ -573,6 +603,7 @@ ascal
 	.avl_read         (vbuf_read),
 	.avl_byteenable   (vbuf_byteenable)
 );
+
 
 reg        FB_EN     = 0;
 reg        FB_FLT    = 0;
