@@ -114,8 +114,28 @@ module emu
 	input   [5:0] USER_IN,
 	output  [5:0] USER_OUT,
 
-	input         OSD_STATUS
+	input         OSD_STATUS,
+	
+	output  wire         bridge_m0_waitrequest,
+	output  wire [31:0]  bridge_m0_readdata,
+	output  wire         bridge_m0_readdatavalid,
+	input   wire [6:0]   bridge_m0_burstcount,
+	input   wire [31:0]  bridge_m0_writedata,
+	input   wire [19:0]  bridge_m0_address,
+	input   wire         bridge_m0_write,
+	input   wire         bridge_m0_read,
+	input   wire         bridge_m0_byteenable,
+	output  wire         bridge_m0_clk
 );
+
+assign  bridge_m0_clk = clk_sys;
+
+assign  bridge_m0_waitrequest = 1'b0;
+
+assign  bridge_m0_readdata = 32'hDEADBEEF;
+assign  bridge_m0_readdatavalid = bridge_m0_read;
+
+
 
 assign ADC_BUS  = 'Z;
 assign USER_OUT = '1;
@@ -1093,8 +1113,11 @@ msu_data_fifo	msu_data_fifo_inst (
 
 	.aclr ( msu_data_fifo_clear ),
 	
-	.data ( sd_buff_dout ),				// Sector data, from the HPS. 16-bit wide.
-	.wrreq ( msu_data_fifo_wr ),
+//	.data ( sd_buff_dout ),				// Sector data, from the HPS. 16-bit wide.
+//	.wrreq ( msu_data_fifo_wr ),
+
+	.data ( bridge_m0_writedata[15:0] ),	// Sector data, from the HPS. 16-bit wide.
+	.wrreq ( bridge_m0_write ),
 	
 	.rdreq ( msu_data_fifo_rdreq ),
 	.q ( msu_data_fifo_dout ),

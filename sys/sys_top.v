@@ -494,13 +494,12 @@ sysmem_lite sysmem
 	.bridge_m0_write( bridge_m0_write ),
 	.bridge_m0_read( bridge_m0_read ),
 	.bridge_m0_byteenable( bridge_m0_byteenable ),
-	.bridge_m0_debugaccess( bridge_m0_debugaccess ),
-	.bridge_m0_clk( FPGA_CLK1_50 )
+	.bridge_m0_clk( bridge_m0_clk )
 );
 
-//(*keep*) wire         bridge_m0_clk = clk_sys;
+(*keep*) wire         bridge_m0_clk;
 
-(*keep*) wire         bridge_m0_waitrequest = 1'b0;
+(*keep*) wire         bridge_m0_waitrequest;
 
 (*keep*) wire [19:0]  bridge_m0_address;
 
@@ -509,11 +508,10 @@ sysmem_lite sysmem
 (*keep*) wire         bridge_m0_byteenable;
 (*keep*) wire [6:0]   bridge_m0_burstcount;
 
-(*keep*) wire [31:0]  bridge_m0_readdata = 32'hDEADBEEF;
-(*keep*) wire         bridge_m0_readdatavalid = bridge_m0_read;
+(*keep*) wire [31:0]  bridge_m0_readdata;
+(*keep*) wire         bridge_m0_readdatavalid;
 (*keep*) wire         bridge_m0_read;
 
-(*keep*) wire         bridge_m0_debugaccess;
 
 
 (*keep*) wire  [27:0] vbuf_address;
@@ -1124,7 +1122,18 @@ emu emu
 	.USER_OUT(user_out),
 	.USER_IN(user_in),
 
-	.OSD_STATUS(osd_status)
+	.OSD_STATUS(osd_status),
+	
+	.bridge_m0_waitrequest( bridge_m0_waitrequest ),
+	.bridge_m0_readdata( bridge_m0_readdata ),
+	.bridge_m0_readdatavalid( bridge_m0_readdatavalid ),
+	.bridge_m0_burstcount( bridge_m0_burstcount ),
+	.bridge_m0_writedata( bridge_m0_writedata ),
+	.bridge_m0_address( bridge_m0_address ),
+	.bridge_m0_write( bridge_m0_write ),
+	.bridge_m0_read( bridge_m0_read ),
+	.bridge_m0_byteenable( bridge_m0_byteenable ),
+	.bridge_m0_clk( bridge_m0_clk )
 );
 
 endmodule

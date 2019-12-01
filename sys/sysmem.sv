@@ -49,7 +49,6 @@ module sysmem_lite (
 	output wire         bridge_m0_write,
 	output wire         bridge_m0_read,
 	output wire         bridge_m0_byteenable,
-//	output wire         bridge_m0_debugaccess,
 	input  wire         bridge_m0_clk
 );
 
