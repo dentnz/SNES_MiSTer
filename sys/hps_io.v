@@ -111,10 +111,13 @@ module hps_io #(parameter STRLEN=0, PS2DIV=0, WIDE=0, VDNUM=4, PS2WE=0)
 
 	// MSU support
 	input      [15:0] msu_trackout,
-	input	            msu_trackrequest_in,
+	input             msu_trackrequest_in,
 	output reg        msu_trackmounting = 0,
 	output reg        msu_trackmissing = 0,
-	output reg 		    msu_trackfinished = 0,
+	output reg        msu_trackfinished = 0,
+	input             msu_data_seek,
+	input      [32:0] msu_data_addr,
+	output reg        msu_dataseekfinished = 0,
 
 	// ps2 keyboard emulation
 	output            ps2_kbd_clk_out,
@@ -418,6 +421,7 @@ always@(posedge clk_sys) begin
 		// Reset MSU stuff too
 		msu_trackfinished <= 0;
 		msu_trackmissing <= 0;
+		msu_dataseekfinished <= 0;
 	end else begin
 		if(io_strobe) begin
 			io_dout <= 0;
@@ -617,8 +621,19 @@ always@(posedge clk_sys) begin
 						// From main_mister: Selected track mounting state
 						msu_trackmounting <= 1;
 						msu_trackmissing <= 0;
+					end
+					'h53: begin
+						// From fpga: Data Seek has happened
+						case (byte_cnt)
+							1: io_dout <= msu_data_seek;
+							2: io_dout <= msu_data_addr[15:0];
+							3: io_dout <= msu_data_addr[31:16];
+						endcase
 					end       
-					
+					'h54: begin
+						// From main_mister: Data Seek has 'finished'
+						msu_dataseekfinished <= 1;
+					end
 					//sdram size set
 					'h31: if(byte_cnt == 1) sdram_sz <= io_din;
 				endcase

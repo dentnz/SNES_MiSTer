@@ -62,6 +62,7 @@ initial begin
     msu_data_addr = 0;
     msu_data_req <= 0;
     msu_data_seek <= 0;
+    msu_status_data_busy_out <= 0;
 
     dbg_msu_reg = 0;
 end
@@ -73,7 +74,7 @@ assign volume_out = MSU_VOLUME;
 // Status bits
 localparam [2:0] msu_status_revision = 3'b001;
 wire [7:0] MSU_STATUS = {
-    msu_status_data_busy, 
+    msu_status_data_busy_out, 
     msu_status_audio_busy, 
     msu_status_audio_repeat, 
     msu_status_audio_playing_out, 
@@ -117,6 +118,9 @@ reg WR_N_falling = 0;
 reg msu_status_track_missing_in_1 = 1'b0;
 reg msu_status_audio_playing_in_old = 0;
 
+reg msu_status_busy_1 = 1'b0;
+reg msu_status_data_busy_out = 1'b0;
+
 // track mounting with respect to audio busy
 reg track_mounting_falling = 0;
 reg track_mounting_old = 0;
@@ -141,6 +145,8 @@ always @(posedge CLK or negedge RST_N) begin
         msu_status_audio_repeat <= 0;
         msu_status_track_missing <= 0;
         msu_status_track_missing_in_1 <= 0;
+        // new data status
+        msu_status_data_busy_out <= 0;
         trig_play <= 0;
         trig_pause <= 0;
         track_mounting_old <= 0;
@@ -168,20 +174,18 @@ always @(posedge CLK or negedge RST_N) begin
         track_mounting_old <= track_mounting;
         msu_status_audio_playing_in_old <= msu_status_audio_playing_in;
 
+        // Falling edge of data busy
+        msu_status_busy_1 <= msu_status_data_busy;
+        if (msu_status_busy_1 & !msu_status_data_busy) begin
+            msu_status_data_busy_out <= 0;
+        end
+
         // Falling edge of track mounting
         if (track_mounting_falling) begin
             dbg_msu_reg <= 8'd7;
             msu_status_track_missing <= msu_status_track_missing_in;
             track_change_audio_busy <= 0;
         end
-
-        // RISING edge of RD_N, when it goes to idle
-        // So the address increments AFTER the SNES has read the data from the CURRENT address
-        // 0x2001 = MSU DATA Port
-        // if (ENABLE && IO_BANK_SEL && ADDR[15:0]==16'h2001 && (!RD_N_1 && RD_N) ) begin
-        //     msu_data_addr <= msu_data_addr + 1;
-        //     msu_data_req <= 1'b1;
-        // end
 
         // FALLING edge of WR_N.
         // 0x2003 = MSU SEEK Port
@@ -229,6 +233,7 @@ always @(posedge CLK or negedge RST_N) begin
                     msu_data_addr <= {DIN, MSU_SEEK[23:0]};
                     // And a pulse of msu_data_seek
                     msu_data_seek <= 1;
+                    msu_status_data_busy_out <= 1;
                 end
                 // MSU_Track LSB
                 16'h2004: begin
@@ -314,6 +319,14 @@ always @(posedge CLK or negedge RST_N) begin
                 default:;
             endcase
         end
+
+        // RISING edge of RD_N, when it goes to idle
+        // So the address increments AFTER the SNES has read the data from the CURRENT address
+        // 0x2001 = MSU DATA Port
+        // if (ENABLE && IO_BANK_SEL && ADDR[15:0]==16'h2001 && (!RD_N_1 && RD_N) ) begin
+        //     msu_data_addr <= msu_data_addr + 1;
+        //     msu_data_req <= 1'b1;
+        // end
     end
 end
 
