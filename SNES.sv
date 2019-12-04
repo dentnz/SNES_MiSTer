@@ -1000,7 +1000,7 @@ else begin
 		msu_data_fifo_busy <= 1'b1;
 		msu_dataseekfinished <= 0;
 		// Init sd, fifo, internal counters
-		sd_lba_2 <= msu_data_sector;
+		sd_lba_2 <= 0;
 		allow_data_fifo_wr <= 1'b1;
 		msu_data_wordcount <= 8'd0;
 		sd_rd[2] <= 1'b0;
@@ -1077,7 +1077,6 @@ else begin
 end
 
 wire msu_data_req;
-wire [22:0] msu_data_sector = msu_data_addr[31:9];
 // 512 bytes in a sector
 wire [8:0] msu_data_byte_offset = msu_data_addr[8:0];
 // Clear the FIFO, for only ONE clock pulse, else it will clear the first sector we transfer.
