@@ -319,7 +319,7 @@ hps_io #(.STRLEN($size(CONF_STR)>>3), .WIDE(1)) hps_io
 	.msu_trackmissing(msu_trackmissing),
 	.msu_trackfinished(msu_trackfinished),
 
-	.msu_data_seek(msu_data_seek_out),
+	.msu_data_seek_in(msu_data_seek_out),
 	.msu_data_addr(msu_data_addr),
 	.msu_dataseekfinished(msu_dataseekfinished_out),
 
@@ -454,7 +454,7 @@ wire msu_audio_playing_out;
 wire [31:0] msu_data_addr;
 wire [7:0] msu_data_in;
 // busy status is a combination of fifo and dataseek (by the hps) states
-wire msu_data_busy = msu_data_fifo_busy || (msu_dataseekfinished != 1);
+wire msu_data_busy = msu_data_fifo_busy || (msu_dataseekfinished == 0);
 wire msu_data_seek;
 
 main main
@@ -959,52 +959,56 @@ assign msu_audio_r = (msu_audio_play) ? msu_vol_mix_r[23:8] : 16'h0000;
 /////////////////////////  MSU Data //////////////////////////////
 
 (*noprune*) reg [7:0] msu_data_debug = 0;
-(*noprune*) reg msu_dataseekfinished = 0;
+(*noprune*) reg msu_dataseekfinished = 1;
 (*noprune*) reg msu_data_fifo_busy = 0;
 (*noprune*) reg msu_data_seek_out = 0;
+(*noprune*) reg msu_data_seek_old = 0;
+
+(*noprune*) reg [7:0] msu_data_debug_dataseeks = 0;
 
 // MSU Data track reading state machine
 always @(posedge clk_sys or posedge reset)
 if (reset) begin
-	// pause the state machine
+	msu_data_debug_dataseeks <= 0;
+	// pause the state machine in state 4 on reset
 	msu_data_state <= 8'd4;
 	msu_data_wordcount <= 0;
 	sd_lba_2 <= 0;
 	sd_rd[2] <= 0;
 
-	allow_data_fifo_wr <= 1'b0;
-
 	msu_data_addr_bit1_old <= 0;
 
-	msu_data_fifo_busy <= 1'b0;
-	msu_dataseekfinished <= 0;
+	msu_data_fifo_busy <= 0;
+	msu_dataseekfinished <= 1;
 	msu_dataseekfinished_out_old <= 0;
 	msu_data_debug <= 8'd0;
+	msu_data_seek_old <= 0;
 end
 else begin
-
-	msu_data_debug <= 8'd0;
-
 	// falling edge stuff
 	msu_data_addr_bit1_old <= msu_data_addr[1];
 	msu_dataseekfinished_out_old <= msu_dataseekfinished_out;
+	msu_data_seek_old <= msu_data_seek;
 
-	if (msu_dataseekfinished_out_old && ~msu_dataseekfinished_out) begin
+	// For HPS seek pulse
+	msu_data_seek_out <= 0;
+		
+	if (msu_dataseekfinished_out_old == 1 && msu_dataseekfinished_out == 0) begin
 		msu_data_debug <= 8'd66;
-		msu_data_seek_out <= 0;
 		msu_dataseekfinished <= 1;
 	end
 
-	if (msu_data_seek) begin
+	// Rising edge
+	if (msu_data_seek_old == 0 && msu_data_seek == 1) begin
+		msu_data_debug_dataseeks <= msu_data_debug_dataseeks + 1;
 		// Both our fifo and hps are seeking
-		msu_data_fifo_busy <= 1'b1;
+		msu_data_fifo_busy <= 1;
 		msu_dataseekfinished <= 0;
 		// Init sd, fifo, internal counters
-		sd_lba_2 <= msu_data_sector;
-		allow_data_fifo_wr <= 1'b1;
+		sd_lba_2 <= 0;
 		msu_data_wordcount <= 8'd0;
 		sd_rd[2] <= 1'b0;
-		// Tell the hps to seek now
+		// Tell the hps to seek now, one pulse
 		msu_data_seek_out <= 1;
 
 		// Kick off the state machine
@@ -1015,16 +1019,6 @@ else begin
 	0: begin
 		sd_rd[2] <= 1'b1;
 		msu_data_wordcount <= 8'd0;
-	
-		// if (msu_data_byte_offset > 0) begin
-		// 	msu_data_debug <= 8'd3;
-		// 	// If the byte offset (within a sector boundary) is non-zero, then we have to
-		// 	// inhibit writes to the data FIFO until we see the correct offset
-		// 	allow_data_fifo_wr <= 1'b0;
-		// end else begin
-		// 	msu_data_debug <= 8'd4;
-		// end
-
 		msu_data_state <= msu_data_state + 1;
 	end
 		
@@ -1034,11 +1028,7 @@ else begin
 		msu_data_state <= msu_data_state + 1;
 	end
 	
-	2: begin
-		// Only allow writes to the FIFO once the current WORD offset (from the HPS transfer)
-		// matches the requested WORD offset (from the MSU)...
-		//if (msu_data_wordcount >= msu_data_byte_offset >> 1) allow_data_fifo_wr <= 1'b1;
-	
+	2: begin	
 		if (sd_ack[2] && sd_buff_wr) begin
 			msu_data_wordcount <= msu_data_wordcount + 1;
 		end
@@ -1046,12 +1036,13 @@ else begin
 		// See if we have filled up our 32 sector (16kb) buffer yet BEFORE we say our seek is finished
 		if (!sd_ack[2] & sd_lba_2 >= 32'd30) begin
 			// Let the MSU know the seek has finished, at least in terms of the fifo buffer, hps could still
-			// be seeking... Doesn't matter, we can start reading stuff out of the buffer
-			msu_data_fifo_busy <= 1'b0;
+			// be seeking...
+			msu_data_fifo_busy <= 0;
 			msu_data_state <= msu_data_state + 1;
 			
 			msu_data_debug <= 8'd7;
 		end else if (!sd_ack[2]) begin
+			// Buffer is still not full, increase our sector to top up the fifo in the next step
 			msu_data_state <= msu_data_state + 1;
 			msu_data_debug <= 8'd6;
 		end
@@ -1060,11 +1051,14 @@ else begin
 	3: begin
 		// Keep topping up the fifo, but only if it's not near full. (16kb - 512 bytes = 7936 words)
 		if (msu_data_fifo_usedw < 16'd7936) begin
+			// Buffer is not full, so just top up as normal
 			sd_lba_2 <= sd_lba_2 + 1;
 			msu_data_state <= 0;
 			msu_data_debug <= 8'd2;
+		end else begin
+			// Buffer is full, so we wait here
+			msu_data_debug <= 8'd9;
 		end
-		// Otherwise pause in this state
 	end
 
 	4: begin
@@ -1078,15 +1072,11 @@ end
 
 wire msu_data_req;
 wire [22:0] msu_data_sector = msu_data_addr[31:9];
-// 512 bytes in a sector
-wire [8:0] msu_data_byte_offset = msu_data_addr[8:0];
+
 // Clear the FIFO, for only ONE clock pulse, else it will clear the first sector we transfer.
 wire msu_data_fifo_clear = msu_data_seek || reset;
-// Flag used to inhibit writes to the data FIFO when the seek address is not on a 512-byte sector boundary.
-(*noprune*) reg allow_data_fifo_wr;
-initial allow_data_fifo_wr = 1;
 
-wire msu_data_fifo_wr = !msu_data_fifo_full && allow_data_fifo_wr && sd_ack[2] && sd_buff_wr;
+wire msu_data_fifo_wr = !msu_data_fifo_full && sd_ack[2] && sd_buff_wr;
 wire [15:0] msu_data_fifo_dout;
 wire msu_data_fifo_empty;
 wire msu_data_fifo_full;
@@ -1098,7 +1088,7 @@ reg msu_dataseekfinished_out_old = 0;
 wire msu_data_fifo_rdreq = msu_data_req && (msu_data_addr_bit1_old != msu_data_addr[1]);
 
 msu_data_fifo msu_data_fifo_inst (
-	.aclr(msu_data_fifo_clear),
+	.sclr(msu_data_fifo_clear),
 	.clock(clk_sys),
 	.wrreq(msu_data_fifo_wr),
 	.full(msu_data_fifo_full),

@@ -115,9 +115,9 @@ module hps_io #(parameter STRLEN=0, PS2DIV=0, WIDE=0, VDNUM=4, PS2WE=0)
 	output reg        msu_trackmounting = 0,
 	output reg        msu_trackmissing = 0,
 	output reg        msu_trackfinished = 0,
-	input             msu_data_seek,
+	input             msu_data_seek_in,
 	input      [32:0] msu_data_addr,
-	output reg        msu_dataseekfinished = 0,
+	output reg        msu_dataseekfinished = 1,
 
 	// ps2 keyboard emulation
 	output            ps2_kbd_clk_out,
@@ -326,6 +326,8 @@ always@(posedge clk_sys) begin
 	reg        old_status_set = 0;
 	reg        msu_trackrequest = 0;
 	reg        msu_trackrequest_in_old = 0;
+	reg        msu_data_seek_in_old = 0;
+	reg        msu_data_seek = 0;
 
 	old_status_set <= status_set;
 	if(~old_status_set & status_set) begin
@@ -337,6 +339,13 @@ always@(posedge clk_sys) begin
 	// Falling edge of track request
 	if (msu_trackrequest_in_old & ~msu_trackrequest_in) begin
 		msu_trackrequest <= 1;
+	end
+
+	msu_data_seek_in_old <= msu_data_seek_in;
+	// Falling edge of data seek
+	if (msu_data_seek_in_old & ~msu_data_seek_in) begin
+		msu_data_seek <= 1;
+		msu_dataseekfinished <= 0;
 	end
 
 // sd_cmd = {2'b00, sd_wr[3], sd_wr[2], sd_wr[1], sd_rd[3], sd_rd[2], sd_rd[1], 4'b0101, sd_conf, 1'b1, sd_wr[0], sd_rd[0]};	// Just for notes. ElectronAsh.
@@ -355,6 +364,8 @@ always@(posedge clk_sys) begin
 		sd_cmd[12] <= 0;
 		sd_cmd[13] <= 0;
 		msu_trackrequest <= 0;
+		msu_data_seek <= 0;
+		msu_dataseekfinished <= 1;
 	end
 	else begin
 		// Defaults.
@@ -421,7 +432,6 @@ always@(posedge clk_sys) begin
 		// Reset MSU stuff too
 		msu_trackfinished <= 0;
 		msu_trackmissing <= 0;
-		msu_dataseekfinished <= 0;
 	end else begin
 		if(io_strobe) begin
 			io_dout <= 0;
@@ -616,7 +626,7 @@ always@(posedge clk_sys) begin
 						// From main_mister: Selected track mounted state
 						msu_trackmounting <= 0;
 						msu_trackmissing <= 0;
-					end         
+					end
 					'h52: begin
 						// From main_mister: Selected track mounting state
 						msu_trackmounting <= 1;
@@ -629,10 +639,11 @@ always@(posedge clk_sys) begin
 							2: io_dout <= msu_data_addr[15:0];
 							3: io_dout <= msu_data_addr[31:16];
 						endcase
-					end       
+					end
 					'h54: begin
 						// From main_mister: Data Seek has 'finished'
 						msu_dataseekfinished <= 1;
+						msu_data_seek <= 0;
 					end
 					//sdram size set
 					'h31: if(byte_cnt == 1) sdram_sz <= io_din;

@@ -12,8 +12,8 @@ module MSU(
 
     // Audio HPS control
     // @todo remove this addr_out... we have data_addr_out
-    output     [31:0] addr_out,
-(*keep*) output reg [15:0] track_out,
+    output           [31:0] addr_out,
+(*keep*) output reg  [15:0] track_out,
     output            track_request,
     input             track_mounting,
     input             track_finished,
