@@ -967,12 +967,11 @@ assign msu_audio_r = (msu_audio_play) ? msu_vol_mix_r[23:8] : 16'h0000;
 (*noprune*) reg [7:0] msu_data_debug_dataseeks = 0;
 
 // MSU Data track reading state machine
-always @(posedge clk_sys or posedge reset)
+always @(posedge clk_sys)
 if (reset) begin
 	msu_data_debug_dataseeks <= 0;
 	// pause the state machine in state 4 on reset
 	msu_data_state <= 8'd4;
-	msu_data_wordcount <= 0;
 	sd_lba_2 <= 0;
 	sd_rd[2] <= 0;
 
@@ -1006,7 +1005,6 @@ else begin
 		msu_dataseekfinished <= 0;
 		// Init sd, fifo, internal counters
 		sd_lba_2 <= 0;
-		msu_data_wordcount <= 8'd0;
 		sd_rd[2] <= 1'b0;
 		// Tell the hps to seek now, one pulse
 		msu_data_seek_out <= 1;
@@ -1018,7 +1016,6 @@ else begin
 	case (msu_data_state)
 	0: begin
 		sd_rd[2] <= 1'b1;
-		msu_data_wordcount <= 8'd0;
 		msu_data_state <= msu_data_state + 1;
 	end
 		
@@ -1029,37 +1026,43 @@ else begin
 	end
 	
 	2: begin	
-		if (sd_ack[2] && sd_buff_wr) begin
-			msu_data_wordcount <= msu_data_wordcount + 1;
-		end
-		
 		// See if we have filled up our 32 sector (16kb) buffer yet BEFORE we say our seek is finished
-		if (!sd_ack[2] & sd_lba_2 >= 32'd30) begin
+		if (!sd_ack[2] & sd_lba_2 >= 32'd60) begin
 			// Let the MSU know the seek has finished, at least in terms of the fifo buffer, hps could still
 			// be seeking...
 			msu_data_fifo_busy <= 0;
-			msu_data_state <= msu_data_state + 1;
-			
+	
 			msu_data_debug <= 8'd7;
+			if (msu_data_fifo_usedw < 16'd16128) begin
+				// Buffer is not full, so just top up as normal
+				sd_lba_2 <= sd_lba_2 + 1;
+				msu_data_state <= 0;
+				msu_data_debug <= 8'd22;
+			end
 		end else if (!sd_ack[2]) begin
-			// Buffer is still not full, increase our sector to top up the fifo in the next step
-			msu_data_state <= msu_data_state + 1;
 			msu_data_debug <= 8'd6;
+
+			if (msu_data_fifo_usedw < 16'd16128) begin
+				// Buffer is not full, so just top up as normal
+				sd_lba_2 <= sd_lba_2 + 1;
+				msu_data_state <= 0;
+				msu_data_debug <= 8'd23;
+			end
 		end
 	end
 
-	3: begin
-		// Keep topping up the fifo, but only if it's not near full. (16kb - 512 bytes = 7936 words)
-		if (msu_data_fifo_usedw < 16'd7936) begin
-			// Buffer is not full, so just top up as normal
-			sd_lba_2 <= sd_lba_2 + 1;
-			msu_data_state <= 0;
-			msu_data_debug <= 8'd2;
-		end else begin
-			// Buffer is full, so we wait here
-			msu_data_debug <= 8'd9;
-		end
-	end
+	// 3: begin
+	// 	// Keep topping up the fifo, but only if it's not near full. (16kb - 512 bytes = 7936 words)
+	// 	if (msu_data_fifo_usedw < 16'd7936) begin
+	// 		// Buffer is not full, so just top up as normal
+	// 		sd_lba_2 <= sd_lba_2 + 1;
+	// 		msu_data_state <= 0;
+	// 		msu_data_debug <= 8'd2;
+	// 	end else begin
+	// 		// Buffer is full, so we wait here
+	// 		msu_data_debug <= 8'd9;
+	// 	end
+	// end
 
 	4: begin
 		// Initial 'Paused' state
@@ -1100,7 +1103,6 @@ msu_data_fifo msu_data_fifo_inst (
 );
 
 (*noprune*) reg [7:0] msu_data_state = 2'd4;
-(*noprune*) reg [7:0] msu_data_wordcount = 2'd0;
 
 // Select the lower or upper byte from the 16-bit data from the buffer, depending on the LSB bit of msu_data_addr...
 // (because hps_io is set up to transfer 16-bit words, which is handy for audio track playback, but msu_data reads 
