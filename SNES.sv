@@ -38,8 +38,8 @@ module emu
 	output        CE_PIXEL,
 
 	//Video aspect ratio for HDMI. Most retro systems have ratio 4:3.
-	output  [7:0] VIDEO_ARX,
-	output  [7:0] VIDEO_ARY,
+	output [11:0] VIDEO_ARX,
+	output [11:0] VIDEO_ARY,
 
 	output  [7:0] VGA_R,
 	output  [7:0] VGA_G,
@@ -49,6 +49,7 @@ module emu
 	output        VGA_DE,    // = ~(VBlank | HBlank)
 	output        VGA_F1,
 	output [1:0]  VGA_SL,
+	output        VGA_SCALER, // Force VGA scaler
 
 	output        LED_USER,  // 1 - ON, 0 - OFF.
 
@@ -63,9 +64,10 @@ module emu
 	// b[0]: osd button
 	output  [1:0] BUTTONS,
 
+	input         CLK_AUDIO, // 24.576 MHz
 	output [15:0] AUDIO_L,
 	output [15:0] AUDIO_R,
-	output        AUDIO_S, // 1 - signed audio samples, 0 - unsigned
+	output        AUDIO_S,   // 1 - signed audio samples, 0 - unsigned
 	output  [1:0] AUDIO_MIX, // 0 - no mix, 1 - 25%, 2 - 50%, 3 - 100% (mono)
 
 	//ADC
@@ -128,13 +130,16 @@ assign {UART_RTS, UART_TXD, UART_DTR} = 0;
 assign AUDIO_S   = 1;
 assign AUDIO_MIX = status[20:19];
 
-assign LED_USER  = cart_download | (status[23] & bk_pending);
+assign LED_USER  = cart_download | spc_download | (status[23] & bk_pending);
 assign LED_DISK  = 0;
 assign LED_POWER = 0;
-assign BUTTONS   = 0;
+assign BUTTONS   = osd_btn;
+assign VGA_SCALER= 0;
 
-assign VIDEO_ARX = status[31:30] == 2 ? 8'd16 : (status[30] ? 8'd8 : 8'd64);
-assign VIDEO_ARY = status[31:30] == 2 ? 8'd9  : (status[30] ? 8'd7 : 8'd49);
+wire [1:0] ar = status[33:32];
+
+assign VIDEO_ARX = (!ar) ? 12'd64 : (ar - 1'd1);
+assign VIDEO_ARY = (!ar) ? 12'd49 : 12'd0;
 
 assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = 0;
 assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
@@ -150,9 +155,8 @@ pll pll
 	.refclk(CLK_50M),
 	.rst(0),
 	.outclk_0(clk_mem),
-	.outclk_1(SDRAM_CLK),
-	.outclk_2(CLK_VIDEO),
-	.outclk_3(clk_sys),
+	.outclk_1(CLK_VIDEO),
+	.outclk_2(clk_sys),
 	.reconfig_to_pll(reconfig_to_pll),
 	.reconfig_from_pll(reconfig_from_pll),
 	.locked(clock_locked)
@@ -211,50 +215,67 @@ always @(posedge CLK_50M) begin
 	end
 end
 
-wire reset = RESET | buttons[1] | status[0] | cart_download | bk_loading;
+wire reset = RESET | buttons[1] | status[0] | cart_download | spc_download | bk_loading | clearing_ram;
 
 ////////////////////////////  HPS I/O  //////////////////////////////////
 
+// Status Bit Map:
+// 0         1         2         3          4         5         6
+// 01234567890123456789012345678901 23456789012345678901234567890123
+// 0123456789ABCDEFGHIJKLMNOPQRSTUV 0123456789ABCDEFGHIJKLMNOPQRSTUV
+// XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX   XXX
+
 `include "build_id.v"
 parameter CONF_STR = {
-    "SNES;;",
-    "FS,SFCSMCBIN;",
-    "-;",
-    "OEF,Video Region,Auto,NTSC,PAL;",
-    "O13,ROM Header,Auto,No Header,LoROM,HiROM,ExHiROM;",
-    "-;",
-    "C,Cheats;",
-    "H2OO,Cheats Enabled,Yes,No;",
-    "-;",
-    "D0RC,Load Backup RAM;",
-    "D0RD,Save Backup RAM;",
-    "D0ON,Autosave,Off,On;",
-    "D0-;",
-    "OUV,Aspect Ratio,4:3,8:7,16:9;",
-    "O9B,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
-    "OG,Pseudo Transparency,Blend,Off;",
-    "OJK,Stereo Mix,None,25%,50%,100%;", 
-    "-;",
-    "O56,Mouse,None,Port1,Port2;",
-    "O7,Swap Joysticks,No,Yes;",
-    "OH,Multitap,Disabled,Port2;",
-    "O8,Serial,OFF,SNAC;",
-    "-;",
-    "OPQ,Super Scope,Disabled,Joy1,Joy2,Mouse;",
-    "D4OR,Super Scope Btn,Joy,Mouse;",
-    "D4OST,Cross,Small,Big,None;",
-    "-;",
-    "D1OI,SuperFX Speed,Normal,Turbo;",
-    "D3O4,CPU Speed,Normal,Turbo;",
-    "-;",
-    "R0,Reset;",
-    "J1,A(SS Fire),B(SS Cursor),X(SS TurboSw),Y(SS Pause),LT(SS Cursor),RT(SS Fire),Select,Start;",
-    "V,v",`BUILD_DATE
+	"SNES;;",
+	"FS0,SFCSMCBINBS ;",
+	"FS1,SPC;",
+	"-;",
+	"OEF,Video Region,Auto,NTSC,PAL;",
+	"O13,ROM Header,Auto,No Header,LoROM,HiROM,ExHiROM;",
+	"-;",
+	"C,Cheats;",
+	"H2OO,Cheats Enabled,Yes,No;",
+	"-;",
+	"D0RC,Load Backup RAM;",
+	"D0RD,Save Backup RAM;",
+	"D0ON,Autosave,Off,On;",
+	"D0-;",
+
+	"P1,Audio & Video;",
+	"P1-;",
+	"P1o01,Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
+	"P1O9B,Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
+	"P1OG,Pseudo Transparency,Blend,Off;",
+	"P1-;",
+	"P1OJK,Stereo Mix,None,25%,50%,100%;", 
+
+	"P2,Hardware;",
+	"P2-;",
+	"P2OH,Multitap,Disabled,Port2;",
+	"P2O8,Serial,OFF,SNAC;",
+	"P2-;",
+	"P2OPQ,Super Scope,Disabled,Joy1,Joy2,Mouse;",
+	"D4P2OR,Super Scope Btn,Joy,Mouse;",
+	"D4P2OST,Cross,Small,Big,None;",
+	"D4P2o2,Gun Type,Super Scope,Justifier;",
+	"P2-;",
+	"D1P2OI,SuperFX Speed,Normal,Turbo;",
+	"D3P2O4,CPU Speed,Normal,Turbo;",
+	"P2-;",
+	"P2OLM,Initial WRAM,9966(SNES2),00FF(SNES1),55(SD2SNES),FF;",
+
+	"-;",
+	"O56,Mouse,None,Port1,Port2;",
+	"O7,Swap Joysticks,No,Yes;",
+	"-;",
+	"R0,Reset;",
+	"J1,A(SS Fire),B(SS Cursor),X(SS TurboSw),Y(SS Pause),LT(SS Cursor),RT(SS Fire),Select,Start;",
+	"V,v",`BUILD_DATE
 };
-// free bits: 8,L,M
 
 wire  [1:0] buttons;
-wire [31:0] status;
+wire [63:0] status;
 wire [15:0] status_menumask = {!GUN_MODE, ~turbo_allow, ~gg_available, ~GSU_ACTIVE, ~bk_ena};
 wire        forced_scandoubler;
 reg  [31:0] sd_lba;
@@ -281,6 +302,8 @@ wire  [7:0] joy0_x,joy0_y,joy1_x,joy1_y;
 
 wire [64:0] RTC;
 
+wire [21:0] gamma_bus;
+
 hps_io #(.STRLEN($size(CONF_STR)>>3), .WIDE(1)) hps_io
 (
 	.clk_sys(clk_sys),
@@ -302,7 +325,7 @@ hps_io #(.STRLEN($size(CONF_STR)>>3), .WIDE(1)) hps_io
 
 	.status(status),
 	.status_menumask(status_menumask),
-	.status_in({status[31:5],1'b0,status[3:0]}),
+	.status_in({status[63:5],1'b0,status[3:0]}),
 	.status_set(cart_download),
 
 	.ioctl_addr(ioctl_addr),
@@ -324,11 +347,14 @@ hps_io #(.STRLEN($size(CONF_STR)>>3), .WIDE(1)) hps_io
 	.img_readonly(img_readonly),
 	.img_size(img_size),
 	
-	.RTC(RTC)
+	.RTC(RTC),
+
+	.gamma_bus(gamma_bus)
 );
 
 wire       GUN_BTN = status[27];
 wire [1:0] GUN_MODE = status[26:25];
+wire       GUN_TYPE = status[34];
 wire       GSU_TURBO = status[18];
 wire       BLEND = ~status[16];
 wire [1:0] mouse_mode = status[6:5];
@@ -337,7 +363,8 @@ wire [2:0] LHRom_type = status[3:1];
 
 wire code_index = &ioctl_index;
 wire code_download = ioctl_download & code_index;
-wire cart_download = ioctl_download & ~code_index;
+wire cart_download = ioctl_download & ioctl_index[5:0] == 0;
+wire spc_download = ioctl_download & ioctl_index[5:0] == 1;
 
 reg new_vmode;
 always @(posedge clk_sys) begin
@@ -407,6 +434,33 @@ always @(posedge clk_sys) begin
 	end
 end
 
+reg spc_mode = 0;
+always @(posedge clk_sys) begin
+	if(ioctl_wr) begin
+		spc_mode <= spc_download;
+	end
+end
+
+reg osd_btn = 0;
+always @(posedge clk_sys) begin
+	integer timeout = 0;
+	reg     has_bootrom = 0;
+	reg     last_rst = 0;
+
+	if (RESET) last_rst = 0;
+	if (status[0]) last_rst = 1;
+
+	if (cart_download & ioctl_wr & status[0]) has_bootrom <= 1;
+
+	if(last_rst & ~status[0]) begin
+		osd_btn <= 0;
+		if(timeout < 24000000) begin
+			timeout <= timeout + 1;
+			osd_btn <= ~has_bootrom;
+		end
+	end
+end
+
 ////////////////////////////  SYSTEM  ///////////////////////////////////
 
 wire GSU_ACTIVE;
@@ -414,7 +468,7 @@ wire turbo_allow;
 
 main main
 (
-	.RESET_N(~reset),
+	.RESET_N(RESET_N),
 
 	.MCLK(clk_sys), // 21.47727 / 21.28137
 	.ACLK(clk_sys),
@@ -429,9 +483,10 @@ main main
 	.BLEND(BLEND),
 
 	.ROM_ADDR(ROM_ADDR),
+	.ROM_D(ROM_D),
 	.ROM_Q(ROM_Q),
-	.ROM_CE_N(ROM_CE_N),
 	.ROM_OE_N(ROM_OE_N),
+	.ROM_WE_N(ROM_WE_N),
 	.ROM_WORD(ROM_WORD),
 
 	.BSRAM_ADDR(BSRAM_ADDR),
@@ -462,19 +517,19 @@ main main
 	.ARAM_CE_N(ARAM_CE_N),
 	.ARAM_WE_N(ARAM_WE_N),
 
-	.R(R),
-	.G(G),
-	.B(B),
+	.R(R_out),
+	.G(G_out),
+	.B(B_out),
 
 	.FIELD(FIELD),
 	.INTERLACE(INTERLACE),
 	.HIGH_RES(HIGH_RES),
-	.DOTCLK(DOTCLK),
+	.DOTCLK(DOTCLK_out),
 	
-	.HBLANKn(HBlank_n),
-	.VBLANKn(VBlank_n),
-	.HSYNC(HSYNC),
-	.VSYNC(VSYNC),
+	.HBLANKn(HBlank_out),
+	.VBLANKn(VBlank_out),
+	.HSYNC(HSYNC_out),
+	.VSYNC(VSYNC_out),
 
 	.JOY1_DI(JOY1_DI),
 	.JOY2_DI(GUN_MODE ? LG_DO : JOY2_DI),
@@ -492,12 +547,29 @@ main main
 	.GG_RESET((code_download && ioctl_wr && !ioctl_addr) || cart_download),
 	.GG_AVAILABLE(gg_available),
 	
+	.SPC_MODE(spc_mode),
+	
+	.IO_ADDR(ioctl_addr[16:0]),
+	.IO_DAT(ioctl_dout),
+	.IO_WR(spc_download & ioctl_wr),
+	
 	.TURBO(status[4] & turbo_allow),
 	.TURBO_ALLOW(turbo_allow),
 
 	.AUDIO_L(AUDIO_L),
 	.AUDIO_R(AUDIO_R)
 );
+
+reg RESET_N = 0;
+reg RFSH = 0;
+always @(posedge clk_sys) begin
+	reg [1:0] div;
+	
+	div <= div + 1'd1;
+	RFSH <= !div;
+	
+	if (div == 2) RESET_N <= ~reset;
+end
 
 ////////////////////////////  CODES  ///////////////////////////////////
 
@@ -532,11 +604,38 @@ end
 
 ////////////////////////////  MEMORY  ///////////////////////////////////
 
+reg [16:0] mem_fill_addr;
+reg clearing_ram = 0;
+always @(posedge clk_sys) begin
+	if(~old_downloading & cart_download)
+		clearing_ram <= 1'b1;
+
+	if (&mem_fill_addr) clearing_ram <= 0;
+
+	if (clearing_ram)
+		mem_fill_addr <= mem_fill_addr + 1'b1;
+	else
+		mem_fill_addr <= 0;
+end
+
+reg [7:0] wram_fill_data;
+always @* begin
+    case(status[22:21])
+        0: wram_fill_data = (mem_fill_addr[8] ^ mem_fill_addr[2]) ? 8'h66 : 8'h99;
+        1: wram_fill_data = (mem_fill_addr[9] ^ mem_fill_addr[0]) ? 8'hFF : 8'h00;
+        2: wram_fill_data = 8'h55;
+        3: wram_fill_data = 8'hFF;
+    endcase
+end
+
 wire[23:0] ROM_ADDR;
-wire       ROM_CE_N;
 wire       ROM_OE_N;
+wire       ROM_WE_N;
 wire       ROM_WORD;
+wire[15:0] ROM_D;
 wire[15:0] ROM_Q;
+
+wire[24:0] addr_download = ioctl_addr-10'd512;
 
 sdram sdram
 (
@@ -544,11 +643,11 @@ sdram sdram
 	.init(0), //~clock_locked),
 	.clk(clk_mem),
 	
-	.addr(cart_download ? ioctl_addr-10'd512 : ROM_ADDR),
-	.din(ioctl_dout),
+	.addr(cart_download ? addr_download : ROM_ADDR),
+	.din(cart_download ? ioctl_dout : ROM_D),
 	.dout(ROM_Q),
-	.rd(~cart_download & ~ROM_CE_N & ~ROM_OE_N),
-	.wr(ioctl_wr & cart_download),
+	.rd(~cart_download & (RESET_N ? ~ROM_OE_N : RFSH)),
+	.wr(cart_download ? ioctl_wr : ~ROM_WE_N),
 	.word(cart_download | ROM_WORD),
 	.busy()
 );
@@ -566,8 +665,9 @@ dpram #(17)	wram
 	.q_a(WRAM_Q),
 
 	// clear the RAM on loading
-	.address_b(ioctl_addr[16:0]),
-	.wren_b(ioctl_wr & cart_download)
+	.address_b(mem_fill_addr[16:0]),
+	.data_b(wram_fill_data),
+	.wren_b(clearing_ram)
 );
 
 wire [15:0] VRAM1_ADDR;
@@ -582,8 +682,8 @@ dpram #(15)	vram1
 	.q_a(VRAM1_Q),
 
 	// clear the RAM on loading
-	.address_b(ioctl_addr[14:0]),
-	.wren_b(ioctl_wr & cart_download)
+	.address_b(mem_fill_addr[14:0]),
+	.wren_b(clearing_ram)
 );
 
 wire [15:0] VRAM2_ADDR;
@@ -598,15 +698,15 @@ dpram #(15) vram2
 	.q_a(VRAM2_Q),
 
 	// clear the RAM on loading
-	.address_b(ioctl_addr[14:0]),
-	.wren_b(ioctl_wr & cart_download)
+	.address_b(mem_fill_addr[14:0]),
+	.wren_b(clearing_ram)
 );
 
 wire [15:0] ARAM_ADDR;
 wire        ARAM_CE_N;
 wire        ARAM_WE_N;
 wire  [7:0] ARAM_Q, ARAM_D;
-dpram #(16) aram
+dpram_dif #(16,8,15,16) aram
 (
 	.clock(clk_sys),
 	.address_a(ARAM_ADDR),
@@ -615,8 +715,9 @@ dpram #(16) aram
 	.q_A(ARAM_Q),
 
 	// clear the RAM on loading
-	.address_b(ioctl_addr[15:0]),
-	.wren_b(ioctl_wr & cart_download)
+	.address_b(spc_download ? addr_download[15:1] : mem_fill_addr[15:1]),
+	.data_b(spc_download ? ioctl_dout : 16'h0000),
+	.wren_b(spc_download ? ioctl_wr : clearing_ram)
 );
 
 localparam  BSRAM_BITS = 17; // 1Mbits
@@ -629,9 +730,9 @@ dpram_dif #(BSRAM_BITS,8,BSRAM_BITS-1,16) bsram
 	.clock(clk_sys),
 
 	//Thrash the BSRAM upon ROM loading
-	.address_a(cart_download ? ioctl_addr[BSRAM_BITS-1:0] : BSRAM_ADDR[BSRAM_BITS-1:0]),
-	.data_a(cart_download ? ioctl_addr[7:0] : BSRAM_D),
-	.wren_a(cart_download ? ioctl_wr : ~BSRAM_CE_N & ~BSRAM_WE_N),
+	.address_a(clearing_ram ? mem_fill_addr[BSRAM_BITS-1:0] : BSRAM_ADDR[BSRAM_BITS-1:0]),
+	.data_a(clearing_ram ? 8'hFF : BSRAM_D),
+	.wren_a(clearing_ram ? 1'b1 : ~BSRAM_CE_N & ~BSRAM_WE_N),
 	.q_a(BSRAM_Q),
 
 	.address_b({sd_lba[BSRAM_BITS-10:0],sd_buff_addr}),
@@ -642,14 +743,35 @@ dpram_dif #(BSRAM_BITS,8,BSRAM_BITS-1,16) bsram
 
 ////////////////////////////  VIDEO  ////////////////////////////////////
 
-wire [7:0] R,G,B;
+wire [7:0] R_out,G_out,B_out;
+wire HSYNC_out;
+wire VSYNC_out;
+wire HBlank_out;
+wire VBlank_out;
+wire DOTCLK_out;
+
+always @(posedge clk_sys) begin
+	DOTCLK <= DOTCLK_out;
+	if(DOTCLK ^ DOTCLK_out) begin
+		R <= R_out;
+		G <= G_out;
+		B <= B_out;
+		HSYNC  <= HSYNC_out;
+		VSYNC  <= VSYNC_out;
+		HBlank <= ~HBlank_out;
+		VBlank <= ~VBlank_out;
+	end
+end
+
+
+reg  [7:0] R,G,B;
 wire FIELD,INTERLACE;
-wire HSync, HSYNC;
-wire VSync, VSYNC;
-wire HBlank_n;
-wire VBlank_n;
+reg  HSync, HSYNC;
+reg  VSync, VSYNC;
+reg  HBlank;
+reg  VBlank;
 wire HIGH_RES;
-wire DOTCLK;
+reg  DOTCLK;
 
 reg interlace;
 reg ce_pix;
@@ -670,7 +792,7 @@ always @(posedge CLK_VIDEO) begin
 
 	pcnt <= pcnt + 1'd1;
 	old_dotclk <= DOTCLK;
-	if(~old_dotclk & DOTCLK & HBlank_n & VBlank_n) pcnt <= 1;
+	if(~old_dotclk & DOTCLK & ~HBlank & ~VBlank) pcnt <= 1;
 
 	ce_pix <= !pcnt[1:0] & (frame_hres | ~pcnt[2]);
 	
@@ -684,19 +806,17 @@ wire [2:0] scale = status[11:9];
 wire [2:0] sl = scale ? scale - 1'd1 : 3'd0;
 wire       scandoubler = ~interlace && (scale || forced_scandoubler);
 
-video_mixer #(.LINE_LENGTH(520)) video_mixer
+video_mixer #(.LINE_LENGTH(520), .GAMMA(1)) video_mixer
 (
 	.*,
 
-	.clk_sys(CLK_VIDEO),
+	.clk_vid(CLK_VIDEO),
 	.ce_pix_out(CE_PIXEL),
 
 	.scanlines(0),
 	.hq2x(scale==1),
 	.mono(0),
 
-	.HBlank(~HBlank_n),
-	.VBlank(~VBlank_n),
 	.R((LG_TARGET && GUN_MODE && (!status[29] | LG_T)) ? {8{LG_TARGET[0]}} : R),
 	.G((LG_TARGET && GUN_MODE && (!status[29] | LG_T)) ? {8{LG_TARGET[1]}} : G),
 	.B((LG_TARGET && GUN_MODE && (!status[29] | LG_T)) ? {8{LG_TARGET[2]}} : B)
@@ -768,12 +888,13 @@ lightgun lightgun
 	.T(LG_T), // always from joysticks
 	.P(ps2_mouse[2] | ((GUN_MODE[0]&joy0[7]) | (GUN_MODE[1]&joy1[7]))), // always from joysticks and mouse
 
-	.HDE(HBlank_n),
-	.VDE(VBlank_n),
+	.HDE(~HBlank),
+	.VDE(~VBlank),
 	.CLKPIX(DOTCLK),
 	
 	.TARGET(LG_TARGET),
 	.SIZE(status[28]),
+	.GUN_TYPE(GUN_TYPE),
 
 	.PORT_LATCH(JOY_STRB),
 	.PORT_CLK(JOY2_CLK),
@@ -828,7 +949,7 @@ reg bk_pending;
 always @(posedge clk_sys) begin
 	if (bk_ena && ~OSD_STATUS && bk_save_write)
 		bk_pending <= 1'b1;
-	else if (bk_state)
+	else if (bk_state | ~bk_ena)
 		bk_pending <= 1'b0;
 end
 
