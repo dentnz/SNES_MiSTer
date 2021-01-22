@@ -1104,7 +1104,7 @@ msu_audio_fifo msu_audio_fifo_inst (
 wire sd_ack_1 = sd_ack[1];
 reg ignore_sd_buffer_out = 0;
 
-msu_audio msu_audio_inst (
+msu msu_inst (
 	.clk(clk_sys),
   	.reset(reset),
   	.img_size(img_size),
