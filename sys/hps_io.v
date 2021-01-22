@@ -129,6 +129,16 @@ module hps_io #(parameter STRLEN=0, PS2DIV=0, WIDE=0, VDNUM=1, PS2WE=0)
 	output reg  [7:0] uart_mode,
 	output reg [31:0] uart_speed,
 
+    // MSU support
+	input      [15:0] msu_trackout,
+	input             msu_trackrequest_in,
+	output reg        msu_trackmounting = 0,
+	output reg        msu_trackmissing = 0,
+	output reg        msu_trackfinished = 0,
+	input             msu_data_seek_in,
+	input      [32:0] msu_data_addr,
+	output reg        msu_dataseekfinished = 1,
+
 	// ps2 keyboard emulation
 	output            ps2_kbd_clk_out,
 	output            ps2_kbd_data_out,
@@ -247,6 +257,10 @@ always@(posedge clk_sys) begin : uio_block
 	reg  [3:0] stflg = 0;
 	reg [63:0] status_req;
 	reg        old_status_set = 0;
+    reg        msu_trackrequest = 0;
+    reg        msu_trackrequest_in_old = 0;
+    reg        msu_data_seek_in_old = 0;
+    reg        msu_data_seek = 0;
 	reg        old_info = 0;
 	reg  [7:0] info_n = 0;
 	reg [15:0] tmp1;
@@ -257,6 +271,19 @@ always@(posedge clk_sys) begin : uio_block
 		stflg <= stflg + 1'd1;
 		status_req <= status_in;
 	end
+
+	msu_trackrequest_in_old <= msu_trackrequest_in;
+	// Falling edge of track request
+	if (msu_trackrequest_in_old & ~msu_trackrequest_in) begin
+		msu_trackrequest <= 1;
+	end
+
+    msu_data_seek_in_old <= msu_data_seek_in;
+    // Falling edge of data seek
+    if (msu_data_seek_in_old & ~msu_data_seek_in) begin
+        msu_data_seek <= 1;
+        msu_dataseekfinished <= 0;
+    end
 
 	old_info <= info_req;
 	if(~old_info & info_req) info_n <= info;
@@ -286,6 +313,8 @@ always@(posedge clk_sys) begin : uio_block
 		io_dout <= 0;
 		ps2skip <= 0;
 		img_mounted <= 0;
+        msu_trackfinished <= 0;
+        msu_trackmissing <= 0;
 	end
 	else if(io_strobe) begin
 
@@ -488,6 +517,52 @@ always@(posedge clk_sys) begin : uio_block
 								3: {uart_speed, uart_mode} <= {io_din, tmp1, tmp2};
 							endcase
 						end
+                //MSU support
+                'h4e: begin
+                    // From main_mister: Track has reached end of the file
+                    msu_trackfinished <= 1;
+                end
+                'h4f: begin
+                    // From main_mister: Selected track is missing - this is a pulse
+                    msu_trackmissing <= 1;
+                    msu_trackmounting <= 0;
+                end
+                'h50: begin
+                    // To main_mister: Selected track
+                    case (byte_cnt)
+                        1: io_dout <= msu_trackout;
+                        2: begin
+                            io_dout <= msu_trackrequest;
+                            // Now that main_mister has read the trackout, we clear this flag
+                            msu_trackrequest <= 1'b0;
+                        end
+                    endcase
+                end
+                'h51: begin
+                    // From main_mister: Selected track mounted state
+                    msu_trackmounting <= 0;
+                    msu_trackmissing <= 0;
+                end
+                'h52: begin
+                    // From main_mister: Selected track mounting state
+                    msu_trackmounting <= 1;
+                    msu_trackmissing <= 0;
+                end
+                'h53: begin
+                    // From fpga: Data Seek has happened
+                    case (byte_cnt)
+                        1: io_dout <= msu_data_seek;
+                        2: io_dout <= msu_data_addr[15:0];
+                        3: io_dout <= msu_data_addr[31:16];
+                    endcase
+                end
+                'h54: begin
+                    // From main_mister: Data Seek has 'finished'
+                    msu_dataseekfinished <= 1;
+                    msu_data_seek <= 0;
+                end
+                //sdram size set
+                'h31: if(byte_cnt == 1) sdram_sz <= io_din;
 			endcase
 		end
 	end

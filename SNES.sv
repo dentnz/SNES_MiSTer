@@ -372,6 +372,13 @@ wire [24:0] ps2_mouse;
 
 wire  [7:0] joy0_x,joy0_y,joy1_x,joy1_y;
 
+reg  [15:0] msu_trackout = 0;
+reg         msu_trackrequest = 0;
+reg   		msu_trackmounting = 0;
+reg         msu_trackmissing = 0;
+reg			msu_trackmissing_reset = 0;
+reg			msu_trackfinished = 0;
+wire		msu_dataseekfinished_out;
 wire [64:0] RTC;
 
 wire [21:0] gamma_bus;
@@ -394,6 +401,16 @@ hps_io #(.STRLEN($size(CONF_STR)>>3), .WIDE(1)) hps_io
 	.joystick_3(joy3),
 	.joystick_4(joy4),
 	.ps2_mouse(ps2_mouse),
+
+	.msu_trackout(msu_trackout),
+	.msu_trackrequest_in(msu_trackrequest),
+	.msu_trackmounting(msu_trackmounting),
+	.msu_trackmissing(msu_trackmissing),
+	.msu_trackfinished(msu_trackfinished),
+
+	.msu_data_seek_in(msu_data_seek_out),
+	.msu_data_addr(msu_data_addr),
+	.msu_dataseekfinished(msu_dataseekfinished_out),
 
 	.status(status),
 	.status_menumask(status_menumask),
@@ -538,6 +555,24 @@ end
 wire GSU_ACTIVE;
 wire turbo_allow;
 
+reg [15:0] MAIN_AUDIO_L;
+reg [15:0] MAIN_AUDIO_R;
+reg msu_trig_play = 0;
+reg msu_trig_pause = 0;
+
+// Msu1 Audio
+wire [7:0] msu_volume_out;
+wire msu_repeat_out;
+wire msu_audio_playing = msu_audio_play;
+wire msu_audio_playing_out;
+
+// Msu1 Data
+wire [31:0] msu_data_addr;
+wire [7:0] msu_data_in;
+// busy status is a combination of fifo and dataseek (by the hps) states
+wire msu_data_busy = msu_data_fifo_busy || (msu_dataseekfinished == 0);
+wire msu_data_seek;
+
 main main
 (
 	.RESET_N(RESET_N),
@@ -547,6 +582,25 @@ main main
 
 	.GSU_ACTIVE(GSU_ACTIVE),
 	.GSU_TURBO(GSU_TURBO),
+
+	.MSU_TRACKOUT(msu_trackout),
+	.MSU_TRACKREQUEST(msu_trackrequest),
+	.MSU_TRACKMOUNTING(msu_trackmounting),
+	.MSU_TRIG_PLAY(msu_trig_play),
+	.MSU_TRIG_PAUSE(msu_trig_pause),
+
+	.MSU_VOLUME_OUT(msu_volume_out),
+	.MSU_REPEAT_OUT(msu_repeat_out),
+	.MSU_AUDIO_PLAYING_IN(msu_audio_playing),
+	.MSU_AUDIO_PLAYING_OUT(msu_audio_playing_out),
+	.MSU_TRACKMISSING(msu_trackmissing),
+	.MSU_TRACKFINISHED(msu_trackfinished),
+
+	.MSU_DATA_ADDR(msu_data_addr),
+	.MSU_DATA_IN(msu_data_in),
+	.MSU_DATA_BUSY(msu_data_busy),
+	.MSU_DATA_SEEK(msu_data_seek),
+	.MSU_DATA_REQ(msu_data_req),
 
 	.ROM_TYPE(rom_type),
 	.ROM_MASK(rom_mask),
@@ -628,9 +682,15 @@ main main
 	.TURBO(status[4] & turbo_allow),
 	.TURBO_ALLOW(turbo_allow),
 
-	.AUDIO_L(AUDIO_L),
-	.AUDIO_R(AUDIO_R)
+	.AUDIO_L(MAIN_AUDIO_L),
+	.AUDIO_R(MAIN_AUDIO_R)
 );
+
+wire signed [16:0] AUDIO_MIX_L = $signed({MAIN_AUDIO_L[15], MAIN_AUDIO_L}) + $signed({msu_audio_l[15], msu_audio_l});
+wire signed [16:0] AUDIO_MIX_R = $signed({MAIN_AUDIO_R[15], MAIN_AUDIO_R}) + $signed({msu_audio_r[15], msu_audio_r});
+
+assign AUDIO_L = AUDIO_MIX_L[16:1];
+assign AUDIO_R = AUDIO_MIX_R[16:1];
 
 reg RESET_N = 0;
 reg RFSH = 0;
@@ -967,6 +1027,266 @@ lightgun lightgun
 	.PORT_P6(LG_P6_out),
 	.PORT_DO(LG_DO)
 );
+
+///////////////////////////  MSU Audio  ///////////////////////////////
+// Please use SD2SNES compatible MSU1 hacks *only*
+//
+// Many thanks to ElectronAsh and Qwertymodo for helping me get my head around this
+// Respect to Ash who helped with setting up things for me to bug fix, and for teaching me
+// how to think like a FPGA programmer a little more!
+// Respect to Qwertymodo for creating msu1.sfc! An extremely useful tool in the early phases
+// of development.
+//
+// Thanks to Amoore2600, Uigiflip, BrunoSilva, for testing
+// Much thanks to JFT, Steve Fox, Mike SmokeMonster for their donations/assistance
+
+// State of playing in the msu_audio instance
+(*noprune*) reg msu_audio_play = 0;
+
+reg left_chan = 0;
+reg [15:0] temp_l;
+reg [15:0] samp_l;
+reg [15:0] samp_r;
+reg [9:0] audio_clk_div = 0;
+
+// MSU audio sample player - Pulls samples out of the FIFO buffer
+always @(posedge CLK_50M) begin
+	// The first sample of a MSU PCM file should be the LEFT sample. (ignoring the two header words).
+	// The rest of the samples should be contiguously interleaved (LEFt/RIGHT) from that point on.
+	if (sd_ack[1] && sd_lba_1==0 && msu_audio_word_count==4) left_chan <= 1'b1;
+
+	if (audio_clk_div > 0) audio_clk_div <= audio_clk_div - 1;
+	else begin
+		left_chan <= !left_chan;
+		audio_clk_div <= 566;
+
+		// left then right samples
+		if (left_chan) temp_l <= audio_fifo_dout;
+		else begin
+			// Make sure both the left and right samples get output at the same time.
+			samp_l <= temp_l;
+			samp_r <= audio_fifo_dout;
+		end
+	end
+end
+
+// The MSU audio PCM files contain the "MSU1" ASCII in the first two WORDs,
+// followed by two more words that contain the loop index (in SAMPLES), for when repeat mode is active.
+//
+// (sd_lba_1==0, to check only the first sector).
+wire msu_header_skip = sd_lba_1==0 && (msu_audio_word_count >= 0 && msu_audio_word_count <= 3);
+
+(*keep*) wire audio_clk_en = (audio_clk_div==1);
+(*keep*) wire audio_fifo_reset = RESET | msu_trackmounting | msu_trackmissing_reset | cart_download;
+(*keep*) wire audio_fifo_full;
+(*keep*) wire audio_fifo_wr = !audio_fifo_full && sd_ack[1] && sd_buff_wr && !msu_header_skip && !ignore_sd_buffer_out;
+(*keep*) wire [11:0] audio_fifo_usedw;
+(*keep*) wire audio_fifo_empty;
+(*keep*) wire audio_fifo_rd = !audio_fifo_empty && audio_clk_en && msu_audio_play;
+(*keep*) wire [15:0] audio_fifo_dout;
+
+reg [15:0] msu_audio_l;
+reg [15:0] msu_audio_r;
+
+msu_audio_fifo msu_audio_fifo_inst (
+	.aclr(audio_fifo_reset),
+	.wrclk(clk_sys),
+	.wrreq(audio_fifo_wr),
+	.wrfull(audio_fifo_full),
+	.wrusedw(audio_fifo_usedw),
+	.data(sd_buff_dout),
+	.rdclk(CLK_50M),
+	.rdreq(audio_fifo_rd),
+	.rdempty(audio_fifo_empty),
+	.q(audio_fifo_dout)
+);
+
+wire sd_ack_1 = sd_ack[1];
+reg ignore_sd_buffer_out = 0;
+
+msu_audio msu_audio_inst (
+	.clk(clk_sys),
+  	.reset(reset),
+  	.img_size(img_size),
+  	.trig_play(msu_trig_play),
+	.trig_pause(msu_trig_pause),
+	.sd_ack_1(sd_ack[1]),
+  	.repeat_in(msu_repeat_out),
+  	.trackmounting(msu_trackmounting),
+	.trackmissing(msu_trackmissing),
+	.trackfinished(msu_trackfinished),
+  	.sd_buff_wr(sd_buff_wr),
+	.sd_buff_dout(sd_buff_dout),
+  	.audio_fifo_usedw(audio_fifo_usedw),
+  	.sd_lba_1(sd_lba_1),
+	.ignore_sd_buffer_out(ignore_sd_buffer_out),
+  	.audio_play(msu_audio_play),
+	.audio_play_in(msu_audio_playing_out),
+	.word_count(msu_audio_word_count),
+  	.sd_rd_1(sd_rd[1]),
+	.trackmissing_reset(msu_trackmissing_reset)
+);
+
+wire signed [8:0] msu_vol_signed = {1'b0, msu_volume_out};
+wire signed [23:0] msu_vol_mix_l = $signed(samp_l) * msu_vol_signed;
+wire signed [23:0] msu_vol_mix_r = $signed(samp_r) * msu_vol_signed;
+assign msu_audio_l = (msu_audio_play) ? msu_vol_mix_l[23:8] : 16'h0000;
+assign msu_audio_r = (msu_audio_play) ? msu_vol_mix_r[23:8] : 16'h0000;
+
+/////////////////////////  MSU Data //////////////////////////////
+
+(*noprune*) reg [7:0] msu_data_debug = 0;
+(*noprune*) reg msu_dataseekfinished = 1;
+(*noprune*) reg msu_data_fifo_busy = 0;
+(*noprune*) reg msu_data_seek_out = 0;
+(*noprune*) reg msu_data_seek_old = 0;
+
+(*noprune*) reg [7:0] msu_data_debug_dataseeks = 0;
+
+// MSU Data track reading state machine
+always @(posedge clk_sys)
+if (reset) begin
+	msu_data_debug_dataseeks <= 0;
+	// pause the state machine in state 4 on reset
+	msu_data_state <= 8'd4;
+	sd_lba_2 <= 0;
+	sd_rd[2] <= 0;
+
+	msu_data_addr_bit1_old <= 0;
+
+	msu_data_fifo_busy <= 0;
+	msu_dataseekfinished <= 1;
+	msu_dataseekfinished_out_old <= 0;
+	msu_data_debug <= 8'd0;
+	msu_data_seek_old <= 0;
+end
+else begin
+	// falling edge stuff
+	msu_data_addr_bit1_old <= msu_data_addr[1];
+	msu_dataseekfinished_out_old <= msu_dataseekfinished_out;
+	msu_data_seek_old <= msu_data_seek;
+
+	// For HPS seek pulse
+	msu_data_seek_out <= 0;
+
+	if (msu_dataseekfinished_out_old == 1 && msu_dataseekfinished_out == 0) begin
+		msu_data_debug <= 8'd66;
+		msu_dataseekfinished <= 1;
+	end
+
+	// Rising edge
+	if (msu_data_seek_old == 0 && msu_data_seek == 1) begin
+		msu_data_debug_dataseeks <= msu_data_debug_dataseeks + 1;
+		// Both our fifo and hps are seeking
+		msu_data_fifo_busy <= 1;
+		msu_dataseekfinished <= 0;
+		// Init sd, fifo, internal counters
+		sd_lba_2 <= 0;
+		sd_rd[2] <= 1'b0;
+		// Tell the hps to seek now, one pulse
+		msu_data_seek_out <= 1;
+
+		// Kick off the state machine
+		msu_data_state <= 0;
+	end
+
+	case (msu_data_state)
+	0: begin
+		sd_rd[2] <= 1'b1;
+		msu_data_state <= msu_data_state + 1;
+	end
+
+	1: if (sd_ack[2]) begin
+		// Sector transfer has started. (Need to check sd_ack[2], so we know the data is for us.)
+		sd_rd[2] <= 1'b0;
+		msu_data_state <= msu_data_state + 1;
+	end
+
+	2: begin
+		// See if we have filled up our 32 sector (16kb) buffer yet BEFORE we say our seek is finished
+		if (!sd_ack[2] & sd_lba_2 >= 32'd60) begin
+			// Let the MSU know the seek has finished, at least in terms of the fifo buffer, hps could still
+			// be seeking...
+			msu_data_fifo_busy <= 0;
+
+			msu_data_debug <= 8'd7;
+			if (msu_data_fifo_usedw < 16'd16128) begin
+				// Buffer is not full, so just top up as normal
+				sd_lba_2 <= sd_lba_2 + 1;
+				msu_data_state <= 0;
+				msu_data_debug <= 8'd22;
+			end
+		end else if (!sd_ack[2]) begin
+			msu_data_debug <= 8'd6;
+
+			if (msu_data_fifo_usedw < 16'd16128) begin
+				// Buffer is not full, so just top up as normal
+				sd_lba_2 <= sd_lba_2 + 1;
+				msu_data_state <= 0;
+				msu_data_debug <= 8'd23;
+			end
+		end
+	end
+
+	// 3: begin
+	// 	// Keep topping up the fifo, but only if it's not near full. (16kb - 512 bytes = 7936 words)
+	// 	if (msu_data_fifo_usedw < 16'd7936) begin
+	// 		// Buffer is not full, so just top up as normal
+	// 		sd_lba_2 <= sd_lba_2 + 1;
+	// 		msu_data_state <= 0;
+	// 		msu_data_debug <= 8'd2;
+	// 	end else begin
+	// 		// Buffer is full, so we wait here
+	// 		msu_data_debug <= 8'd9;
+	// 	end
+	// end
+
+	4: begin
+		// Initial 'Paused' state
+		msu_data_debug <= 8'd5;
+	end
+
+	default:;
+	endcase
+end
+
+wire msu_data_req;
+wire [22:0] msu_data_sector = msu_data_addr[31:9];
+
+// Clear the FIFO, for only ONE clock pulse, else it will clear the first sector we transfer.
+wire msu_data_fifo_clear = msu_data_seek || reset;
+
+wire msu_data_fifo_wr = !msu_data_fifo_full && sd_ack[2] && sd_buff_wr;
+wire [15:0] msu_data_fifo_dout;
+wire msu_data_fifo_empty;
+wire msu_data_fifo_full;
+wire [15:0] msu_data_fifo_usedw;
+
+reg msu_data_addr_bit1_old = 0;
+reg msu_dataseekfinished_out_old = 0;
+
+wire msu_data_fifo_rdreq = msu_data_req && (msu_data_addr_bit1_old != msu_data_addr[1]);
+
+msu_data_fifo msu_data_fifo_inst (
+	.sclr(msu_data_fifo_clear),
+	.clock(clk_sys),
+	.wrreq(msu_data_fifo_wr),
+	.full(msu_data_fifo_full),
+	.usedw(msu_data_fifo_usedw),
+	.data(sd_buff_dout),
+	.rdreq(msu_data_fifo_rdreq),
+	.empty(msu_data_fifo_empty),
+	.q(msu_data_fifo_dout)
+);
+
+(*noprune*) reg [7:0] msu_data_state = 2'd4;
+
+// Select the lower or upper byte from the 16-bit data from the buffer, depending on the LSB bit of msu_data_addr...
+// (because hps_io is set up to transfer 16-bit words, which is handy for audio track playback, but msu_data reads
+// are 8-bit.) ElectronAsh
+assign msu_data_in = (!msu_data_addr[0]) ? msu_data_fifo_dout[7:0] : msu_data_fifo_dout[15:8];
+
+/// MSU DATA ENDS ///
 
 // Indexes:
 // 0 = D+    = Latch
