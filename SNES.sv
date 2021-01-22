@@ -350,10 +350,16 @@ wire  [1:0] buttons;
 wire [63:0] status;
 wire [15:0] status_menumask = {en216p, !GUN_MODE, ~turbo_allow, ~gg_available, ~GSU_ACTIVE, ~bk_ena};
 wire        forced_scandoubler;
-reg  [31:0] sd_lba;
-reg         sd_rd = 0;
-reg         sd_wr = 0;
-wire        sd_ack;
+
+// MSU1 Separated and handled via a muxer in the hps_io module
+wire [31:0] sd_lba_0;
+wire [31:0] sd_lba_1;
+wire [31:0] sd_lba_2;
+wire [31:0] sd_lba_3;
+
+reg   [3:0] sd_rd = 0;
+reg   [3:0] sd_wr = 0;
+wire  [3:0] sd_ack;
 wire  [7:0] sd_buff_addr;
 wire [15:0] sd_buff_dout;
 wire [15:0] sd_buff_din;
@@ -423,7 +429,11 @@ hps_io #(.STRLEN($size(CONF_STR)>>3), .WIDE(1)) hps_io
 	.ioctl_download(ioctl_download),
 	.ioctl_index(ioctl_index),
 
-	.sd_lba(sd_lba),
+	.sd_lba_0(sd_lba_0),
+	.sd_lba_1(sd_lba_1),
+	.sd_lba_2(sd_lba_2),
+	.sd_lba_3(sd_lba_3),
+
 	.sd_rd(sd_rd),
 	.sd_wr(sd_wr),
 	.sd_ack(sd_ack),
@@ -867,9 +877,9 @@ dpram_dif #(BSRAM_BITS,8,BSRAM_BITS-1,16) bsram
 	.wren_a(clearing_ram ? 1'b1 : ~BSRAM_CE_N & ~BSRAM_WE_N),
 	.q_a(BSRAM_Q),
 
-	.address_b({sd_lba[BSRAM_BITS-10:0],sd_buff_addr}),
+	.address_b({sd_lba_0[BSRAM_BITS-10:0],sd_buff_addr}),
 	.data_b(sd_buff_dout),
-	.wren_b(sd_buff_wr & sd_ack),
+	.wren_b(sd_buff_wr & sd_ack[0]),
 	.q_b(sd_buff_din)
 );
 
@@ -1144,6 +1154,7 @@ assign msu_audio_r = (msu_audio_play) ? msu_vol_mix_r[23:8] : 16'h0000;
 (*noprune*) reg [7:0] msu_data_debug_dataseeks = 0;
 
 // MSU Data track reading state machine
+/*
 always @(posedge clk_sys)
 if (reset) begin
 	msu_data_debug_dataseeks <= 0;
@@ -1249,6 +1260,7 @@ else begin
 	default:;
 	endcase
 end
+*/
 
 wire msu_data_req;
 wire [22:0] msu_data_sector = msu_data_addr[31:9];
@@ -1256,7 +1268,7 @@ wire [22:0] msu_data_sector = msu_data_addr[31:9];
 // Clear the FIFO, for only ONE clock pulse, else it will clear the first sector we transfer.
 wire msu_data_fifo_clear = msu_data_seek || reset;
 
-wire msu_data_fifo_wr = !msu_data_fifo_full && sd_ack[2] && sd_buff_wr;
+//wire msu_data_fifo_wr = !msu_data_fifo_full && sd_ack[2] && sd_buff_wr;
 wire [15:0] msu_data_fifo_dout;
 wire msu_data_fifo_empty;
 wire msu_data_fifo_full;
@@ -1267,6 +1279,7 @@ reg msu_dataseekfinished_out_old = 0;
 
 wire msu_data_fifo_rdreq = msu_data_req && (msu_data_addr_bit1_old != msu_data_addr[1]);
 
+/*
 msu_data_fifo msu_data_fifo_inst (
 	.sclr(msu_data_fifo_clear),
 	.clock(clk_sys),
@@ -1278,6 +1291,7 @@ msu_data_fifo msu_data_fifo_inst (
 	.empty(msu_data_fifo_empty),
 	.q(msu_data_fifo_dout)
 );
+*/
 
 (*noprune*) reg [7:0] msu_data_state = 2'd4;
 
@@ -1359,34 +1373,34 @@ always @(posedge clk_sys) begin
 
 	old_load <= bk_load & bk_ena;
 	old_save <= bk_save & bk_ena;
-	old_ack  <= sd_ack;
+	old_ack  <= sd_ack[0];
 
-	if(~old_ack & sd_ack) {sd_rd, sd_wr} <= 0;
+	if(~old_ack & sd_ack[0]) {sd_rd[0], sd_wr[0]} <= 0;
 	
 	if(!bk_state) begin
 		if((~old_load & bk_load) | (~old_save & bk_save)) begin
 			bk_state <= 1;
 			bk_loading <= bk_load;
-			sd_lba <= 0;
-			sd_rd <=  bk_load;
-			sd_wr <= ~bk_load;
+			sd_lba_0 <= 0;
+			sd_rd[0] <=  bk_load;
+			sd_wr[0] <= ~bk_load;
 		end
 		if(old_downloading & ~cart_download & |img_size & bk_ena) begin
 			bk_state <= 1;
 			bk_loading <= 1;
-			sd_lba <= 0;
-			sd_rd <= 1;
-			sd_wr <= 0;
+			sd_lba_0 <= 0;
+			sd_rd[0] <= 1;
+			sd_wr[0] <= 0;
 		end
 	end else begin
-		if(old_ack & ~sd_ack) begin
-			if(sd_lba >= ram_mask[23:9]) begin
+		if(old_ack & ~sd_ack[0]) begin
+			if(sd_lba_0 >= ram_mask[23:9]) begin
 				bk_loading <= 0;
 				bk_state <= 0;
 			end else begin
-				sd_lba <= sd_lba + 1'd1;
-				sd_rd  <=  bk_loading;
-				sd_wr  <= ~bk_loading;
+				sd_lba_0 <= sd_lba_0 + 1'd1;
+				sd_rd[0]  <=  bk_loading;
+				sd_wr[0]  <= ~bk_loading;
 			end
 		end
 	end
