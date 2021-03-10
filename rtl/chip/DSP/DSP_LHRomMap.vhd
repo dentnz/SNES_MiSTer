@@ -69,13 +69,7 @@ entity DSP_LHRomMap is
 		MSU_DATA_SEEK		  : out std_logic;
 		MSU_DATA_REQ		  : out std_logic;
 
-		EXT_RTC		: in std_logic_vector(64 downto 0);
-
-		BRK_OUT		: out std_logic;
-		DBG_REG		: in std_logic_vector(7 downto 0) := (others => '0');
-		DBG_DAT_IN	: in std_logic_vector(7 downto 0) := (others => '0');
-		DBG_DAT_OUT	: out std_logic_vector(7 downto 0);
-		DBG_DAT_WR	: in std_logic := '0'
+		EXT_RTC		: in std_logic_vector(64 downto 0)
 	);
 end DSP_LHRomMap;
 
@@ -306,8 +300,6 @@ begin
 
 		RD_N		  => CPURD_N,
 		WR_N		  => CPUWR_N,
-
-		-- @todo CS for MSU_SEL?
 
 		ADDR		  => CA,
 		DIN			  => DI,

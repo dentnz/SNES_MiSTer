@@ -11,8 +11,6 @@ module MSU(
     output reg  [7:0] DOUT,
 
     // Audio HPS control
-    // @todo remove this addr_out... we have data_addr_out
-    output           [31:0] addr_out,
 (*keep*) output reg  [15:0] track_out,
     output            track_request,
     input             track_mounting,
@@ -23,6 +21,7 @@ module MSU(
     output reg        trig_pause,
     output reg  [7:0] volume_out,
 
+    // Wired into the status reg later
     output reg msu_status_audio_busy,
     output reg msu_status_audio_repeat,
     // This should contain if the msu_audio instance is currently playing
@@ -40,8 +39,8 @@ module MSU(
     output reg msu_data_req,
 
     // Debug stuff
-    output reg [7:0] dbg_msu_reg,
-    output reg [7:0] dbg_msu_status
+(*keep*) output reg [7:0] dbg_msu_reg,
+(*keep*) output reg [7:0] dbg_msu_status
 );
 
 initial begin
@@ -100,11 +99,8 @@ assign MSU_ID[5] = "1";
 reg [31:0] MSU_SEEK;                      // $2000 - $2003
 reg [15:0] MSU_TRACK;                     // $2004 - $2005
 reg  [7:0] MSU_VOLUME;                    // $2006
-(*keep*) reg  [7:0] MSU_CONTROL;                   // $2007
+(*keep*) reg  [7:0] MSU_CONTROL;          // $2007
 reg [31:0] MSU_ADDR;
-
-// @todo can probably delete this msu_data_addr is used instead
-assign addr_out = MSU_ADDR;
 
 // Make sure we are aware of which bank ADDR is currently in
 (*keep*) wire IO_BANK_SEL = (ADDR[23:16]>=8'h00 && ADDR[23:16]<=8'h3F) || (ADDR[23:16]>=8'h80 && ADDR[23:16]<=8'hBF);
@@ -145,7 +141,6 @@ always @(posedge CLK or negedge RST_N) begin
         msu_status_audio_repeat <= 0;
         msu_status_track_missing <= 0;
         msu_status_track_missing_in_1 <= 0;
-        // new data status
         msu_status_data_busy_out <= 0;
         trig_play <= 0;
         trig_pause <= 0;

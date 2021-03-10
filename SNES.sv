@@ -1154,7 +1154,6 @@ assign msu_audio_r = (msu_audio_play) ? msu_vol_mix_r[23:8] : 16'h0000;
 (*noprune*) reg [7:0] msu_data_debug_dataseeks = 0;
 
 // MSU Data track reading state machine
-/*
 always @(posedge clk_sys)
 if (reset) begin
 	msu_data_debug_dataseeks <= 0;
@@ -1180,6 +1179,7 @@ else begin
 	// For HPS seek pulse
 	msu_data_seek_out <= 0;
 
+    // HPS is saying dataseek has finished
 	if (msu_dataseekfinished_out_old == 1 && msu_dataseekfinished_out == 0) begin
 		msu_data_debug <= 8'd66;
 		msu_dataseekfinished <= 1;
@@ -1260,7 +1260,6 @@ else begin
 	default:;
 	endcase
 end
-*/
 
 wire msu_data_req;
 wire [22:0] msu_data_sector = msu_data_addr[31:9];
@@ -1268,7 +1267,7 @@ wire [22:0] msu_data_sector = msu_data_addr[31:9];
 // Clear the FIFO, for only ONE clock pulse, else it will clear the first sector we transfer.
 wire msu_data_fifo_clear = msu_data_seek || reset;
 
-//wire msu_data_fifo_wr = !msu_data_fifo_full && sd_ack[2] && sd_buff_wr;
+wire msu_data_fifo_wr = !msu_data_fifo_full && sd_ack[2] && sd_buff_wr;
 wire [15:0] msu_data_fifo_dout;
 wire msu_data_fifo_empty;
 wire msu_data_fifo_full;
@@ -1279,7 +1278,6 @@ reg msu_dataseekfinished_out_old = 0;
 
 wire msu_data_fifo_rdreq = msu_data_req && (msu_data_addr_bit1_old != msu_data_addr[1]);
 
-/*
 msu_data_fifo msu_data_fifo_inst (
 	.sclr(msu_data_fifo_clear),
 	.clock(clk_sys),
@@ -1291,7 +1289,6 @@ msu_data_fifo msu_data_fifo_inst (
 	.empty(msu_data_fifo_empty),
 	.q(msu_data_fifo_dout)
 );
-*/
 
 (*noprune*) reg [7:0] msu_data_state = 2'd4;
 
@@ -1339,7 +1336,6 @@ always_comb begin
 		JOY2_P6_DI = (LG_P6_out | !GUN_MODE);
 	end
 end
-
 
 /////////////////////////  STATE SAVE/LOAD  /////////////////////////////
 
