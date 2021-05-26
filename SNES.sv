@@ -374,6 +374,13 @@ wire [10:0] ps2_key;
 
 wire  [7:0] joy0_x,joy0_y,joy1_x,joy1_y;
 
+reg  [15:0] msu_trackout = 0;
+reg         msu_trackrequest = 0;
+reg   		msu_trackmounting = 0;
+reg         msu_trackmissing = 0;
+reg			msu_trackmissing_reset = 0;
+reg			msu_trackfinished = 0;
+wire		msu_dataseekfinished_out;
 wire [64:0] RTC;
 
 wire [21:0] gamma_bus;
@@ -424,7 +431,17 @@ hps_io #(.STRLEN($size(CONF_STR)>>3), .WIDE(1)) hps_io
 	
 	.RTC(RTC),
 
-	.gamma_bus(gamma_bus)
+	.gamma_bus(gamma_bus),
+	.EXT_BUS(EXT_BUS)
+);
+
+wire [35:0] EXT_BUS;
+hps_ext hps_ext
+(
+	.clk_sys(clk_sys),
+	.EXT_BUS(EXT_BUS),
+	.cd_out(ext_out),    // From the HPS
+	.cd_in(ext_in)       // To HPS
 );
 
 wire       GUN_BTN = status[27];
@@ -541,6 +558,25 @@ end
 wire GSU_ACTIVE;
 wire turbo_allow;
 
+reg [15:0] MAIN_AUDIO_L;
+reg [15:0] MAIN_AUDIO_R;
+reg msu_trig_play = 0;
+reg msu_trig_pause = 0;
+
+// Msu1 Audio
+wire [7:0] msu_volume_out;
+wire msu_repeat_out;
+wire msu_audio_playing = msu_audio_play;
+wire msu_audio_playing_out;
+
+// Msu1 Data
+/*wire [31:0] msu_data_addr;
+wire [7:0] msu_data_in;
+// busy status is a combination of fifo and dataseek (by the hps) states
+wire msu_data_busy = msu_data_fifo_busy || (msu_dataseekfinished == 0);
+wire msu_data_seek;
+*/
+
 main main
 (
 	.RESET_N(RESET_N),
@@ -639,9 +675,15 @@ main main
 	.DBG_CPU_EN(1'b1),
 `endif
 
-	.AUDIO_L(AUDIO_L),
-	.AUDIO_R(AUDIO_R)
+	.AUDIO_L(MAIN_AUDIO_L),
+	.AUDIO_R(MAIN_AUDIO_R)
 );
+
+wire signed [16:0] AUDIO_MIX_L = $signed({MAIN_AUDIO_L[15], MAIN_AUDIO_L}) + $signed({msu_audio_l[15], msu_audio_l});
+wire signed [16:0] AUDIO_MIX_R = $signed({MAIN_AUDIO_R[15], MAIN_AUDIO_R}) + $signed({msu_audio_r[15], msu_audio_r});
+
+assign AUDIO_L = AUDIO_MIX_L[16:1];
+assign AUDIO_R = AUDIO_MIX_R[16:1];
 
 reg RESET_N = 0;
 reg RFSH = 0;
@@ -978,6 +1020,208 @@ lightgun lightgun
 	.PORT_P6(LG_P6_out),
 	.PORT_DO(LG_DO)
 );
+
+///////////////////////////  MSU Audio  ///////////////////////////////
+// Please use SD2SNES compatible MSU1 hacks *only*
+//
+// Respect to ElectronAsh who helped with setting up things for me to bug fix, and for teaching me
+// how to think like a FPGA programmer a little more!
+// Respect to Qwertymodo for creating msu1.sfc! An extremely useful tool in the early phases
+// of development.
+//
+// Thanks to Amoore2600, Uigiflip, BrunoSilva, for testing
+// Much thanks to JFT, Steve Fox, Mike SmokeMonster for their donations/assistance
+
+// EXT bus is used to communicate with the HPS for Audio
+reg  [48:0] ext_in;
+wire [48:0] ext_out;
+wire        ext_dm;
+reg         ext_send = 0;
+reg  [46:0] ext_command = 0;
+
+always @(posedge clk_sys) begin
+	reg ext_out48_last = 1;
+	reg ext_send_old = 0;
+	reg [2:0]  cnt = 0;
+	reg [39:0] ext_data;
+	reg ext_dm;
+	reg rst_old = 0;
+	reg ext_rec = 0;
+	reg reset_old = 0;
+    reg ps2_old;
+    reg enter = 0;
+    reg esc = 0;
+    reg about_to_play = 0;
+
+    ps2_old <= ps2_key[10];
+    if (ps2_old ^ ps2_key[10]) begin
+        if(ps2_key[7:0] == 'h5A) enter <= ps2_key[9];
+        if(ps2_key[7:0] == 'h76) esc   <= ps2_key[9];
+    end
+
+    // Debug
+    if (enter) begin
+        ext_command <= 'h34;
+        ext_send <= 1;
+        enter <= 0;
+        esc <= 0;
+        about_to_play <= 0;
+        msu_audio_play <= 0;
+    end
+
+    if (esc) begin
+        ext_command <= 'h35;
+        ext_send <= 1;
+        enter <= 0;
+        esc <= 0;
+        about_to_play <= 1;
+    end
+
+    // Received a status? - bit 48 has toggled
+	if (ext_out[48] != ext_out48_last) begin
+		ext_out48_last <= ext_out[48];
+		ext_data <= ext_out[39:0];
+		ext_dm <= ext_out[40];
+		ext_rec <= 1;
+		cnt <= 7;
+	end else if (cnt) begin
+	    // Get another 7 bytes
+		cnt <= cnt - 1'd1;
+	end else begin
+		ext_rec <= 0;
+		if (about_to_play == 1) begin
+		    msu_audio_play <= 1;
+		end
+	end
+
+    // Send and reset
+	ext_send_old <= ext_send;
+	if (ext_send && !ext_send_old) begin
+		ext_in[47:0] <= {8'h00, ext_command};
+		ext_in[48] <= ~ext_in[48];
+		ext_send <= 0;
+	end
+	else begin
+		reset_old <= reset;
+		if (!reset_old && reset) begin
+			ext_in[47:0] <= 8'hFF;
+			ext_in[48] <= ~ext_in[48];
+		end
+	end
+end
+
+//extend ext_wr for 8 cycles
+reg  ext_wr;
+reg [15:0] ext_d;
+
+always @(posedge clk_sys) begin
+	reg [2:0] cnt = 0;
+
+	if (msu_audio_play && ioctl_wr) begin
+		cnt <= 7;
+		ext_wr <= 1;
+		ext_d <= ioctl_dout;
+	end
+	else if (cnt) begin
+		cnt <= cnt - 1'd1;
+	end
+	else begin
+		ext_wr <= 0;
+	end
+end
+
+// State of playing in the msu_audio instance
+reg msu_audio_play = 0;
+
+reg left_chan = 0;
+reg [15:0] temp_l;
+reg [15:0] samp_l;
+reg [15:0] samp_r;
+reg [9:0] audio_clk_div = 0;
+reg [7:0] msu_audio_word_count = 0;
+
+// MSU audio sample player - Pulls samples out of the FIFO buffer - Thanks ElectronAsh
+always @(posedge CLK_50M) begin
+	// The first sample of a MSU PCM file should be the LEFT sample. (ignoring the two header words).
+	// The rest of the samples should be contiguously interleaved (LEFt/RIGHT) from that point on.
+	if (msu_audio_word_count==4) left_chan <= 1'b1;
+
+	if (audio_clk_div > 0) audio_clk_div <= audio_clk_div - 1;
+	else begin
+		left_chan <= !left_chan;
+		audio_clk_div <= 566;
+
+		// left then right samples
+		if (left_chan) temp_l <= audio_fifo_dout;
+		else begin
+			// Make sure both the left and right samples get output at the same time.
+			samp_l <= temp_l;
+			samp_r <= audio_fifo_dout;
+		end
+	end
+end
+
+msu_audio_fifo msu_audio_fifo_inst (
+	.aclr(audio_fifo_reset),
+	.wrclk(clk_sys),
+	.wrreq(audio_fifo_wr),
+	.wrfull(audio_fifo_full),
+	.wrusedw(audio_fifo_usedw),
+	.data(ext_d),
+	.rdclk(CLK_50M),
+	.rdreq(audio_fifo_rd),
+	.rdempty(audio_fifo_empty),
+	.q(audio_fifo_dout)
+);
+
+// The MSU audio PCM files contain the "MSU1" ASCII in the first two WORDs,
+// followed by two more words that contain the loop index (in SAMPLES), for when repeat mode is active.
+//wire msu_header_skip = msu_audio_word_count >= 0 && msu_audio_word_count <= 3;
+
+(*keep*) wire audio_clk_en = (audio_clk_div==1);
+(*keep*) wire audio_fifo_reset = RESET | msu_trackmounting | msu_trackmissing_reset | cart_download;
+(*keep*) wire audio_fifo_full;
+//(*keep*) wire audio_fifo_wr = !audio_fifo_full && !msu_header_skip && ext_wr;
+(*keep*) wire audio_fifo_wr = !audio_fifo_full && ext_wr;
+(*keep*) wire [11:0] audio_fifo_usedw;
+(*keep*) wire audio_fifo_empty;
+(*keep*) wire audio_fifo_rd = !audio_fifo_empty && audio_clk_en && msu_audio_play;
+(*keep*) wire [15:0] audio_fifo_dout;
+
+// Audio summing
+reg [15:0] msu_audio_l;
+reg [15:0] msu_audio_r;
+assign msu_volume_out = 8'hff;
+wire signed [8:0] msu_vol_signed = {1'b0, msu_volume_out};
+wire signed [23:0] msu_vol_mix_l = $signed(samp_l) * msu_vol_signed;
+wire signed [23:0] msu_vol_mix_r = $signed(samp_r) * msu_vol_signed;
+assign msu_audio_l = (msu_audio_play) ? msu_vol_mix_l[23:8] : 16'h0000;
+assign msu_audio_r = (msu_audio_play) ? msu_vol_mix_r[23:8] : 16'h0000;
+
+/*
+msu msu_inst (
+	.clk(clk_sys),
+  	.reset(reset),
+  	.img_size(img_size),
+  	.trig_play(msu_trig_play),
+	.trig_pause(msu_trig_pause),
+	.sd_ack_1(sd_ack[1]),
+  	.repeat_in(msu_repeat_out),
+  	.trackmounting(msu_trackmounting),
+	.trackmissing(msu_trackmissing),
+	.trackfinished(msu_trackfinished),
+  	.sd_buff_wr(sd_buff_wr),
+	.sd_buff_dout(sd_buff_dout),
+  	.audio_fifo_usedw(audio_fifo_usedw),
+  	.sd_lba_1(sd_lba_1),
+	.ignore_sd_buffer_out(ignore_sd_buffer_out),
+  	.audio_play(msu_audio_play),
+	.audio_play_in(msu_audio_playing_out),
+	.word_count(msu_audio_word_count),
+  	.sd_rd_1(sd_rd[1]),
+	.trackmissing_reset(msu_trackmissing_reset)
+);
+*/
 
 // Indexes:
 // 0 = D+    = Latch
